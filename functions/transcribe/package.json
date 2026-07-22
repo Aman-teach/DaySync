@@ -1,0 +1,6 @@
+{
+  "name": "transcribe-function",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Appwrite Function — Deepgram transcription proxy"
+}
