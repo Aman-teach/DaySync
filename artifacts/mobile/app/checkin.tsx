@@ -1,8 +1,11 @@
+/**
+ * Check-in modal — Text + Voice tabs, sticky save, spring animations.
+ */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Dimensions,
-  KeyboardAvoidingView,
+  Keyboard,
   Platform,
   Pressable,
   ScrollView,
@@ -21,7 +24,6 @@ import Animated, {
   withSequence,
   withSpring,
   withTiming,
-  runOnJS,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
@@ -36,152 +38,175 @@ import * as Haptics from 'expo-haptics';
 import * as FileSystem from 'expo-file-system';
 import { FocusLevel, EnergyLevel } from '@/types';
 
-// Lazy-import expo-av so it doesn't crash on web
 let AudioModule: typeof import('expo-av') | null = null;
 if (Platform.OS !== 'web') {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    AudioModule = require('expo-av');
-  } catch {}
+  try { AudioModule = require('expo-av'); } catch {}
 }
 
 type VoiceState = 'idle' | 'recording' | 'processing' | 'transcribed';
+type Mode = 'text' | 'voice';
 
 const PROMPT = getRandomPrompt();
 const { width: SW, height: SH } = Dimensions.get('screen');
-const CIRCLE_SIZE = Math.sqrt(SW * SW + SH * SH) * 2.2;
 
-// ─── Pulse ring ─────────────────────────────────────────────────────────────
+// ─── Pulse ring ──────────────────────────────────────────────────────────────
 function PulseRing({ delay, active }: { delay: number; active: boolean }) {
-  const scale = useSharedValue(0.3);
+  const scale   = useSharedValue(0.4);
   const opacity = useSharedValue(0);
 
   useEffect(() => {
     if (active) {
-      scale.value = withDelay(
-        delay,
-        withRepeat(withTiming(1, { duration: 1800 }), -1, false)
-      );
-      opacity.value = withDelay(
-        delay,
-        withRepeat(
-          withSequence(withTiming(0.45, { duration: 200 }), withTiming(0, { duration: 1600 })),
-          -1,
-          false
-        )
-      );
+      scale.value   = withDelay(delay, withRepeat(withTiming(1, { duration: 1700 }), -1, false));
+      opacity.value = withDelay(delay, withRepeat(
+        withSequence(withTiming(0.5, { duration: 150 }), withTiming(0, { duration: 1550 })),
+        -1, false
+      ));
     } else {
-      scale.value = withTiming(0.3, { duration: 300 });
-      opacity.value = withTiming(0, { duration: 300 });
+      scale.value   = withTiming(0.4, { duration: 250 });
+      opacity.value = withTiming(0,   { duration: 250 });
     }
   }, [active]);
 
-  const style = useAnimatedStyle(() => ({
+  const s = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
     opacity: opacity.value,
   }));
-
-  return <Animated.View pointerEvents="none" style={[styles.pulseRing, style]} />;
+  return <Animated.View pointerEvents="none" style={[styles.pulseRing, s]} />;
 }
 
-// ─── Main component ──────────────────────────────────────────────────────────
+// ─── Animated tab switcher ───────────────────────────────────────────────────
+function ModeTabs({
+  mode,
+  onSwitch,
+  disabled,
+  isRecording,
+}: {
+  mode: Mode;
+  onSwitch: (m: Mode) => void;
+  disabled?: boolean;
+  isRecording?: boolean;
+}) {
+  const colors  = useColors();
+  const pillX   = useSharedValue(mode === 'text' ? 0 : 1);
+  const mounted = useRef(false);
+
+  useEffect(() => {
+    const target = mode === 'text' ? 0 : 1;
+    if (!mounted.current) { pillX.value = target; mounted.current = true; return; }
+    pillX.value = withSpring(target, { damping: 20, stiffness: 320 });
+  }, [mode]);
+
+  const PILL_W = 86;
+  const pillStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: pillX.value * PILL_W }],
+  }));
+
+  const labelColor = (active: boolean) =>
+    isRecording
+      ? active ? '#fff' : '#ffffff70'
+      : active ? colors.foreground : colors.mutedForeground;
+
+  return (
+    <View style={[styles.tabs, { backgroundColor: isRecording ? '#ffffff18' : colors.muted }]}>
+      {/* Sliding pill */}
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.tabPill,
+          { backgroundColor: isRecording ? '#ffffff25' : colors.background },
+          pillStyle,
+        ]}
+      />
+      {(['text', 'voice'] as Mode[]).map(m => (
+        <Pressable
+          key={m}
+          style={styles.tabBtn}
+          onPress={() => { if (!disabled) onSwitch(m); }}
+        >
+          <Feather
+            name={m === 'text' ? 'edit-2' : 'mic'}
+            size={12}
+            color={labelColor(mode === m)}
+          />
+          <Text style={[styles.tabLabel, { color: labelColor(mode === m), fontFamily: mode === m ? 'Inter_700Bold' : 'Inter_400Regular' }]}>
+            {m === 'text' ? 'Text' : 'Voice'}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+// ─── Main ────────────────────────────────────────────────────────────────────
 export default function CheckinScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const router = useRouter();
   const { addEntry, lastFocus, settings } = useApp();
 
-  const [mode, setMode] = useState<'text' | 'voice'>('text');
-  const [voiceState, setVoiceState] = useState<VoiceState>('idle');
-  const [transcript, setTranscript] = useState('');
-  const [text, setText] = useState('');
+  const [mode,        setMode]        = useState<Mode>('text');
+  const [voiceState,  setVoiceState]  = useState<VoiceState>('idle');
+  const [text,        setText]        = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [focus, setFocus] = useState<FocusLevel>(lastFocus.focus);
+  const [focus,  setFocus]  = useState<FocusLevel>(lastFocus.focus);
   const [energy, setEnergy] = useState<EnergyLevel>(lastFocus.energy);
-  const [saving, setSaving] = useState(false);
-  const [elapsed, setElapsed] = useState(0); // seconds
-  const [transcribeError, setTranscribeError] = useState('');
+  const [saving,    setSaving]    = useState(false);
+  const [elapsed,   setElapsed]   = useState(0);
+  const [txError,   setTxError]   = useState('');
 
-  const recordingRef = useRef<InstanceType<typeof import('expo-av').Audio.Recording> | null>(null);
-  const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const inputRef = useRef<TextInput>(null);
+  const recordingRef  = useRef<InstanceType<typeof import('expo-av').Audio.Recording> | null>(null);
+  const timerRef      = useRef<ReturnType<typeof setInterval> | null>(null);
+  const inputRef      = useRef<TextInput>(null);
 
-  // Animation: 0 = idle/normal, 1 = recording/green
-  const greenAnim = useSharedValue(0);
-  const micScale = useSharedValue(1);
+  // Animations
+  const greenAnim  = useSharedValue(0);
+  const micScale   = useSharedValue(1);
+  const saveScale  = useSharedValue(1);
 
-  const containerStyle = useAnimatedStyle(() => ({
+  useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
+
+  const bgStyle = useAnimatedStyle(() => ({
     backgroundColor: interpolateColor(
-      greenAnim.value,
-      [0, 1],
-      [colors.background, '#2D6A4F']
+      greenAnim.value, [0, 1], [colors.background, '#1B4332']
     ),
   }));
 
-  const micBtnStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: micScale.value }],
-  }));
-
-  // ── Timer helpers ────────────────────────────────────────────────────────
-  const startTimer = () => {
-    setElapsed(0);
-    elapsedRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
-  };
-  const stopTimer = () => {
-    if (elapsedRef.current) clearInterval(elapsedRef.current);
-    elapsedRef.current = null;
-  };
-
-  useEffect(() => () => stopTimer(), []);
-
-  // ── Recording ────────────────────────────────────────────────────────────
+  // ── Recording ─────────────────────────────────────────────────────────────
   const startRecording = useCallback(async () => {
     if (Platform.OS === 'web') {
-      Alert.alert('Not available', 'Voice recording is not supported in the web preview. Use the Expo Go app on your phone.');
+      Alert.alert('Voice needs Expo Go', 'Open this app on your phone with Expo Go to use voice logging.');
       return;
     }
     if (!AudioModule) return;
-    try {
-      const { granted } = await AudioModule.Audio.requestPermissionsAsync();
-      if (!granted) {
-        Alert.alert('Microphone access needed', 'Please allow microphone access in Settings.');
-        return;
-      }
-      await AudioModule.Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-      const rec = new AudioModule.Audio.Recording();
-      await rec.prepareToRecordAsync(
-        AudioModule.Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-      await rec.startAsync();
-      recordingRef.current = rec;
+    const { granted } = await AudioModule.Audio.requestPermissionsAsync();
+    if (!granted) { Alert.alert('Mic needed', 'Allow microphone in Settings to use voice.'); return; }
 
-      setVoiceState('recording');
-      setTranscribeError('');
-      greenAnim.value = withTiming(1, { duration: 550 });
-      micScale.value = withSequence(
-        withSpring(1.15, { damping: 6, stiffness: 200 }),
-        withSpring(1, { damping: 8, stiffness: 180 })
-      );
-      startTimer();
-      try { await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
-    } catch (e) {
-      console.error('Recording start failed', e);
-      Alert.alert('Could not start recording', 'Please try again.');
-    }
+    await AudioModule.Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+    const rec = new AudioModule.Audio.Recording();
+    await rec.prepareToRecordAsync(AudioModule.Audio.RecordingOptionsPresets.HIGH_QUALITY);
+    await rec.startAsync();
+    recordingRef.current = rec;
+
+    setVoiceState('recording');
+    setTxError('');
+    setElapsed(0);
+    greenAnim.value = withTiming(1, { duration: 500 });
+    micScale.value  = withSequence(
+      withSpring(1.18, { damping: 6, stiffness: 220 }),
+      withSpring(1,    { damping: 9, stiffness: 200 })
+    );
+    timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy); } catch {}
   }, []);
 
   const stopRecording = useCallback(async () => {
-    stopTimer();
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
     const rec = recordingRef.current;
     if (!rec) return;
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
 
     setVoiceState('processing');
-    greenAnim.value = withTiming(0, { duration: 450 });
-
-    try { await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+    greenAnim.value = withTiming(0, { duration: 420 });
 
     try {
       await rec.stopAndUnloadAsync();
@@ -189,96 +214,77 @@ export default function CheckinScreen() {
       const uri = rec.getURI();
       if (!uri) throw new Error('No URI');
 
-      // Read as base64 and send to transcribe endpoint
-      const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-
-      const domain = process.env.EXPO_PUBLIC_DOMAIN;
-      const apiBase = domain
-        ? `https://${domain}`
-        : 'http://localhost:8080';
+      const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+      const domain  = process.env.EXPO_PUBLIC_DOMAIN;
+      const apiBase = domain ? `https://${domain}` : 'http://localhost:8080';
 
       const resp = await fetch(`${apiBase}/api/transcribe`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ audio: base64, mimeType: 'audio/m4a' }),
       });
-
-      if (!resp.ok) throw new Error(`Server error ${resp.status}`);
       const data = await resp.json() as { transcript?: string; error?: string };
-
-      const result = data.transcript ?? '';
-      setTranscript(result);
-      setText(result);
+      setText(data.transcript ?? '');
       setVoiceState('transcribed');
-    } catch (e) {
-      console.error('Transcription failed', e);
-      setTranscribeError('Transcription failed — type your note below.');
+      if (data.transcript) { try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {} }
+    } catch {
+      setTxError('Could not transcribe — type your note below.');
       setVoiceState('transcribed');
     }
   }, []);
 
-  const handleMicPress = () => {
-    if (voiceState === 'idle') startRecording();
-    else if (voiceState === 'recording') stopRecording();
-  };
-
-  // ── Save ─────────────────────────────────────────────────────────────────
+  // ── Save ──────────────────────────────────────────────────────────────────
   const handleSave = async () => {
     if (selectedTags.length === 0) {
-      Alert.alert('Select a tag', 'Choose at least one tag before saving.');
+      try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error); } catch {}
+      Alert.alert('Pick a tag', 'Choose at least one activity before saving.');
       return;
     }
-    const finalText = mode === 'voice' ? text : text;
+    saveScale.value = withSequence(
+      withSpring(0.94, { damping: 8, stiffness: 300 }),
+      withSpring(1,    { damping: 9, stiffness: 250 })
+    );
     setSaving(true);
-    try { await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
-    await addEntry({
-      text: finalText.trim(),
-      tags: selectedTags,
-      focus,
-      energy,
-      intervalMinutes: settings.interval,
-    });
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
+    await addEntry({ text: text.trim(), tags: selectedTags, focus, energy, intervalMinutes: settings.interval });
     router.back();
   };
 
-  // ── UI helpers ───────────────────────────────────────────────────────────
-  const toggleTag = (id: string) =>
-    setSelectedTags(prev =>
-      prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
-    );
-
-  const now = new Date();
-  const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const elapsedMin = Math.floor(elapsed / 60);
-  const elapsedSec = elapsed % 60;
-
-  const isRecording = voiceState === 'recording';
-  const isProcessing = voiceState === 'processing';
-
-  const micIconName = isRecording ? 'square' : 'mic';
-  const micBgColor = isRecording ? '#ffffff22' : '#fff';
-  const micIconColor = isRecording ? '#ffffff' : '#2D6A4F';
-
-  const switchMode = (next: 'text' | 'voice') => {
-    if (next === mode) return;
-    if (isRecording) return; // don't switch while recording
-    setMode(next);
-    setVoiceState('idle');
+  const toggleTag = (id: string) => {
+    try { Haptics.selectionAsync(); } catch {}
+    setSelectedTags(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]);
   };
 
-  // ── Shared form (tags + focus/energy) ────────────────────────────────────
-  const sharedForm = (
+  const switchMode = (next: Mode) => {
+    if (next === mode || voiceState === 'recording') return;
+    setMode(next);
+    setVoiceState('idle');
+    Keyboard.dismiss();
+  };
+
+  const isRecording  = voiceState === 'recording';
+  const isProcessing = voiceState === 'processing';
+
+  const now     = new Date();
+  const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const mm      = String(Math.floor(elapsed / 60)).padStart(2, '0');
+  const ss      = String(elapsed % 60).padStart(2, '0');
+
+  const saveBtnStyle = useAnimatedStyle(() => ({ transform: [{ scale: saveScale.value }] }));
+  const micBtnStyle  = useAnimatedStyle(() => ({ transform: [{ scale: micScale.value  }] }));
+
+  // ── Shared bottom form ─────────────────────────────────────────────────────
+  const bottomForm = (
     <>
-      <View style={styles.fieldGroup}>
-        <View style={styles.fieldHeader}>
-          <Text style={[styles.fieldLabel, { color: isRecording ? '#ffffffaa' : colors.mutedForeground }]}>
-            TAG
+      {/* Tags */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={[styles.sectionLabel, { color: isRecording ? '#ffffff99' : colors.mutedForeground }]}>
+            ACTIVITY
           </Text>
           {selectedTags.length === 0 && (
-            <Text style={[styles.required, { color: isRecording ? '#ffaaaa' : colors.destructive }]}>
-              required
+            <Text style={[styles.requiredBadge, { color: isRecording ? '#ffaaaa' : '#D97706' }]}>
+              pick one
             </Text>
           )}
         </View>
@@ -295,15 +301,8 @@ export default function CheckinScreen() {
         </View>
       </View>
 
-      <View
-        style={[
-          styles.pickerCard,
-          {
-            backgroundColor: isRecording ? '#ffffff15' : colors.card,
-            borderColor: isRecording ? '#ffffff30' : colors.border,
-          },
-        ]}
-      >
+      {/* Focus + energy */}
+      <View style={styles.section}>
         <FocusEnergyPicker
           focus={focus}
           energy={energy}
@@ -311,398 +310,294 @@ export default function CheckinScreen() {
           onEnergyChange={setEnergy}
         />
       </View>
-
-      <TouchableOpacity
-        style={[
-          styles.saveBtn,
-          {
-            backgroundColor: selectedTags.length > 0
-              ? (isRecording ? '#fff' : colors.primary)
-              : (isRecording ? '#ffffff33' : colors.muted),
-          },
-        ]}
-        onPress={handleSave}
-        disabled={saving || isRecording || isProcessing}
-        activeOpacity={0.85}
-      >
-        <Text
-          style={[
-            styles.saveBtnText,
-            {
-              color: selectedTags.length > 0
-                ? (isRecording ? '#2D6A4F' : '#fff')
-                : (isRecording ? '#ffffff88' : colors.mutedForeground),
-            },
-          ]}
-        >
-          {saving ? 'Saving…' : 'Save Entry'}
-        </Text>
-      </TouchableOpacity>
     </>
   );
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <Animated.View style={[{ flex: 1, borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden' }, containerStyle]}>
-        {/* Handle */}
-        <View style={[styles.handle, { backgroundColor: isRecording ? '#ffffff55' : colors.border }]} />
+    <Animated.View style={[styles.root, bgStyle]}>
+      {/* Handle */}
+      <View style={[styles.handle, { backgroundColor: isRecording ? '#ffffff44' : colors.border }]} />
 
-        {/* Header row */}
-        <View style={styles.headerRow}>
-          {/* Mode toggle pills */}
-          <View style={[styles.modePills, { backgroundColor: isRecording ? '#ffffff22' : colors.muted }]}>
-            <Pressable
-              style={[
-                styles.modePill,
-                mode === 'text' && !isRecording && {
-                  backgroundColor: colors.card,
-                },
-                mode === 'text' && isRecording && {
-                  backgroundColor: '#ffffff25',
-                },
-              ]}
-              onPress={() => switchMode('text')}
-            >
-              <Feather
-                name="edit-2"
-                size={13}
-                color={
-                  mode === 'text'
-                    ? isRecording ? '#fff' : colors.foreground
-                    : isRecording ? '#ffffff88' : colors.mutedForeground
-                }
-              />
-              <Text
-                style={[
-                  styles.modePillLabel,
-                  {
-                    color:
-                      mode === 'text'
-                        ? isRecording ? '#fff' : colors.foreground
-                        : isRecording ? '#ffffff88' : colors.mutedForeground,
-                    fontFamily:
-                      mode === 'text' ? 'Inter_600SemiBold' : 'Inter_400Regular',
-                  },
-                ]}
-              >
-                Text
-              </Text>
-            </Pressable>
-
-            <Pressable
-              style={[
-                styles.modePill,
-                mode === 'voice' && !isRecording && {
-                  backgroundColor: colors.card,
-                },
-                mode === 'voice' && isRecording && {
-                  backgroundColor: '#ffffff25',
-                },
-              ]}
-              onPress={() => switchMode('voice')}
-            >
-              <Feather
-                name="mic"
-                size={13}
-                color={
-                  mode === 'voice'
-                    ? isRecording ? '#fff' : colors.foreground
-                    : isRecording ? '#ffffff88' : colors.mutedForeground
-                }
-              />
-              <Text
-                style={[
-                  styles.modePillLabel,
-                  {
-                    color:
-                      mode === 'voice'
-                        ? isRecording ? '#fff' : colors.foreground
-                        : isRecording ? '#ffffff88' : colors.mutedForeground,
-                    fontFamily:
-                      mode === 'voice' ? 'Inter_600SemiBold' : 'Inter_400Regular',
-                  },
-                ]}
-              >
-                Voice
-              </Text>
-            </Pressable>
-          </View>
-
-          {/* Time + close */}
-          <View style={styles.headerRight}>
-            <Text style={[styles.timeStr, { color: isRecording ? '#ffffffaa' : colors.mutedForeground }]}>
-              {timeStr}
-            </Text>
-            <TouchableOpacity
-              onPress={() => {
-                if (isRecording) stopRecording();
-                router.back();
-              }}
-              hitSlop={12}
-            >
-              <Feather name="x" size={22} color={isRecording ? '#ffffffcc' : colors.mutedForeground} />
-            </TouchableOpacity>
-          </View>
+      {/* Top bar */}
+      <View style={styles.topBar}>
+        <ModeTabs mode={mode} onSwitch={switchMode} disabled={isRecording} isRecording={isRecording} />
+        <View style={styles.topRight}>
+          <Text style={[styles.clock, { color: isRecording ? '#ffffffaa' : colors.mutedForeground }]}>
+            {timeStr}
+          </Text>
+          <Pressable
+            onPress={() => { if (isRecording) stopRecording(); router.back(); }}
+            hitSlop={14}
+          >
+            <Feather name="x" size={20} color={isRecording ? '#ffffffcc' : colors.mutedForeground} />
+          </Pressable>
         </View>
+      </View>
 
-        <ScrollView
-          contentContainerStyle={[
-            styles.scroll,
-            { paddingBottom: Math.max(insets.bottom + 20, 24) },
-          ]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          {/* ── TEXT MODE ─────────────────────────────────────────── */}
-          {mode === 'text' && (
-            <>
-              <Text style={[styles.prompt, { color: colors.foreground }]}>{PROMPT}</Text>
+      {/* Scrollable content */}
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={[styles.scroll]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {/* ── TEXT MODE ──────────────────────────────────────────── */}
+        {mode === 'text' && (
+          <>
+            <Text style={[styles.prompt, { color: colors.foreground }]}>{PROMPT}</Text>
 
-              <Pressable
-                onPress={() => inputRef.current?.focus()}
-                style={[
-                  styles.inputWrap,
-                  { backgroundColor: colors.card, borderColor: colors.border },
-                ]}
-              >
-                <TextInput
-                  ref={inputRef}
-                  style={[styles.input, { color: colors.foreground }]}
-                  placeholder="What were you doing?"
-                  placeholderTextColor={colors.mutedForeground}
-                  multiline
-                  value={text}
-                  onChangeText={setText}
-                  autoFocus
-                  textAlignVertical="top"
-                />
-              </Pressable>
+            <Pressable onPress={() => inputRef.current?.focus()} style={styles.inputArea}>
+              <TextInput
+                ref={inputRef}
+                style={[styles.input, { color: colors.foreground }]}
+                placeholder="What were you doing?"
+                placeholderTextColor={colors.mutedForeground + '88'}
+                multiline
+                value={text}
+                onChangeText={setText}
+                autoFocus
+                textAlignVertical="top"
+                selectionColor={colors.primary}
+                underlineColorAndroid="transparent"
+              />
+              {/* Subtle bottom rule instead of a box */}
+              <View style={[styles.inputRule, { backgroundColor: colors.border }]} />
+            </Pressable>
 
-              {sharedForm}
-            </>
-          )}
+            {bottomForm}
+          </>
+        )}
 
-          {/* ── VOICE MODE ────────────────────────────────────────── */}
-          {mode === 'voice' && (
-            <>
-              {/* Mic button + pulse rings */}
-              <View style={styles.micArea}>
-                {/* Pulse rings (behind button) */}
-                <View style={styles.pulseContainer}>
-                  <PulseRing delay={0} active={isRecording} />
-                  <PulseRing delay={500} active={isRecording} />
-                  <PulseRing delay={1000} active={isRecording} />
-                </View>
-
-                {/* Central mic button */}
-                <Animated.View style={micBtnStyle}>
-                  <TouchableOpacity
-                    style={[
-                      styles.micBtn,
-                      {
-                        backgroundColor: isRecording ? '#ffffff22' : colors.primary,
-                        borderColor: isRecording ? '#ffffffcc' : 'transparent',
-                        borderWidth: isRecording ? 2 : 0,
-                      },
-                    ]}
-                    onPress={handleMicPress}
-                    disabled={isProcessing}
-                    activeOpacity={0.8}
-                  >
-                    <Feather
-                      name={isProcessing ? 'loader' : micIconName}
-                      size={38}
-                      color={isRecording ? '#fff' : '#fff'}
-                    />
-                  </TouchableOpacity>
-                </Animated.View>
-
-                {/* Timer / status label */}
-                <Text
-                  style={[
-                    styles.micLabel,
-                    {
-                      color: isRecording
-                        ? '#ffffffee'
-                        : isProcessing
-                        ? colors.mutedForeground
-                        : colors.mutedForeground,
-                    },
-                  ]}
-                >
-                  {isRecording
-                    ? `${String(elapsedMin).padStart(2, '0')}:${String(elapsedSec).padStart(2, '0')}`
-                    : isProcessing
-                    ? 'Transcribing…'
-                    : voiceState === 'transcribed'
-                    ? 'Tap mic to re-record'
-                    : Platform.OS === 'web'
-                    ? 'Voice needs Expo Go on phone'
-                    : 'Tap to speak'}
-                </Text>
-
-                {isRecording && (
-                  <Text style={styles.tapToStop}>tap to stop</Text>
-                )}
+        {/* ── VOICE MODE ─────────────────────────────────────────── */}
+        {mode === 'voice' && (
+          <>
+            {/* Mic area */}
+            <View style={styles.micArea}>
+              {/* Pulse rings */}
+              <View style={styles.rings} pointerEvents="none">
+                <PulseRing delay={0}    active={isRecording} />
+                <PulseRing delay={540}  active={isRecording} />
+                <PulseRing delay={1080} active={isRecording} />
               </View>
 
-              {/* Transcript / editable text (shown after transcription) */}
-              {(voiceState === 'transcribed') && (
-                <>
-                  {transcribeError ? (
-                    <Text style={[styles.errorMsg, { color: isRecording ? '#ffaaaa' : colors.destructive }]}>
-                      {transcribeError}
-                    </Text>
-                  ) : null}
-                  <Pressable
-                    onPress={() => inputRef.current?.focus()}
-                    style={[
-                      styles.inputWrap,
-                      { backgroundColor: colors.card, borderColor: colors.border },
-                    ]}
-                  >
-                    <TextInput
-                      ref={inputRef}
-                      style={[styles.input, { color: colors.foreground }]}
-                      placeholder="Your transcript will appear here…"
-                      placeholderTextColor={colors.mutedForeground}
-                      multiline
-                      value={text}
-                      onChangeText={setText}
-                      textAlignVertical="top"
-                    />
-                  </Pressable>
-                </>
-              )}
+              {/* Mic button */}
+              <Animated.View style={micBtnStyle}>
+                <Pressable
+                  style={[
+                    styles.micBtn,
+                    isRecording
+                      ? { backgroundColor: '#ffffff22', borderWidth: 2, borderColor: '#ffffffcc' }
+                      : { backgroundColor: colors.primary },
+                  ]}
+                  onPress={isRecording ? stopRecording : startRecording}
+                  disabled={isProcessing}
+                >
+                  <Feather
+                    name={isProcessing ? 'loader' : isRecording ? 'square' : 'mic'}
+                    size={40}
+                    color="#fff"
+                  />
+                </Pressable>
+              </Animated.View>
 
-              {sharedForm}
-            </>
-          )}
-        </ScrollView>
-      </Animated.View>
-    </KeyboardAvoidingView>
+              {/* Status text */}
+              <Text style={[styles.micStatus, { color: isRecording ? '#ffffffee' : colors.mutedForeground }]}>
+                {isRecording
+                  ? `${mm}:${ss}`
+                  : isProcessing
+                  ? 'Transcribing…'
+                  : voiceState === 'transcribed'
+                  ? 'Tap to re-record'
+                  : Platform.OS === 'web'
+                  ? 'Use Expo Go on your phone'
+                  : 'Tap to speak'}
+              </Text>
+
+              {isRecording && (
+                <Text style={styles.tapStop}>tap square to stop</Text>
+              )}
+            </View>
+
+            {/* Transcript box */}
+            {voiceState === 'transcribed' && (
+              <View style={styles.transcriptWrap}>
+                {txError ? (
+                  <Text style={[styles.txError, { color: colors.destructive }]}>{txError}</Text>
+                ) : (
+                  <Text style={[styles.txHint, { color: colors.mutedForeground }]}>
+                    ✦ Edit if needed
+                  </Text>
+                )}
+                <Pressable onPress={() => inputRef.current?.focus()} style={[styles.inputArea, { marginTop: 6 }]}>
+                  <TextInput
+                    ref={inputRef}
+                    style={[styles.input, { color: colors.foreground }]}
+                    placeholder="Your words will appear here…"
+                    placeholderTextColor={colors.mutedForeground + '88'}
+                    multiline
+                    value={text}
+                    onChangeText={setText}
+                    textAlignVertical="top"
+                    selectionColor={colors.primary}
+                  />
+                </Pressable>
+              </View>
+            )}
+
+            {bottomForm}
+          </>
+        )}
+
+        {/* Bottom spacer so content doesn't hide behind sticky btn */}
+        <View style={{ height: 90 }} />
+      </ScrollView>
+
+      {/* ── Sticky save button ──────────────────────────────────── */}
+      <View
+        style={[
+          styles.saveBar,
+          { paddingBottom: Math.max(insets.bottom, 20), backgroundColor: isRecording ? '#1B4332' : colors.background },
+        ]}
+      >
+        <Animated.View style={[{ flex: 1 }, saveBtnStyle]}>
+          <Pressable
+            style={[
+              styles.saveBtn,
+              {
+                backgroundColor:
+                  selectedTags.length > 0
+                    ? isRecording ? '#fff' : colors.primary
+                    : colors.muted,
+              },
+            ]}
+            onPress={handleSave}
+            disabled={saving || isRecording || isProcessing}
+          >
+            <Text
+              style={[
+                styles.saveBtnText,
+                {
+                  color:
+                    selectedTags.length > 0
+                      ? isRecording ? colors.primary : '#fff'
+                      : colors.mutedForeground,
+                },
+              ]}
+            >
+              {saving ? 'Saving…' : 'Save Entry'}
+            </Text>
+            {selectedTags.length > 0 && !saving && (
+              <Feather name="arrow-right" size={18} color={isRecording ? colors.primary : '#fff'} />
+            )}
+          </Pressable>
+        </Animated.View>
+      </View>
+    </Animated.View>
   );
 }
 
-// ─── Styles ──────────────────────────────────────────────────────────────────
+// ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
+  root: { flex: 1, borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden' },
   handle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginTop: 10,
-    marginBottom: 2,
+    width: 36, height: 4, borderRadius: 2,
+    alignSelf: 'center', marginTop: 10, marginBottom: 0,
   },
-  headerRow: {
+  topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 18,
-    paddingVertical: 10,
-    gap: 12,
+    paddingVertical: 12,
   },
-  modePills: {
+  tabs: {
     flexDirection: 'row',
     borderRadius: 100,
     padding: 3,
-    gap: 2,
+    position: 'relative',
+    overflow: 'hidden',
   },
-  modePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
+  tabPill: {
+    position: 'absolute',
+    top: 3, bottom: 3,
+    width: 86,
     borderRadius: 100,
   },
-  modePillLabel: { fontSize: 13 },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  timeStr: { fontSize: 12, fontFamily: 'Inter_500Medium' },
-  scroll: { paddingHorizontal: 20, paddingTop: 6, gap: 18 },
-  prompt: { fontSize: 20, fontFamily: 'Inter_700Bold', lineHeight: 28 },
-  inputWrap: {
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 14,
-    minHeight: 120,
+  tabBtn: {
+    width: 86,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    gap: 5,
+    zIndex: 1,
   },
+  tabLabel: { fontSize: 13 },
+  topRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  clock: { fontSize: 12, fontFamily: 'Inter_500Medium' },
+  scroll: { paddingHorizontal: 22, paddingTop: 4, gap: 22 },
+  prompt: { fontSize: 22, fontFamily: 'Inter_700Bold', lineHeight: 30, letterSpacing: -0.3 },
+  inputArea: { minHeight: 110, justifyContent: 'flex-start' },
   input: {
-    fontSize: 16,
+    fontSize: 17,
     fontFamily: 'Inter_400Regular',
-    lineHeight: 24,
-    minHeight: 96,
+    lineHeight: 26,
+    minHeight: 90,
+    // Remove web default border
+    ...Platform.select({ web: { outlineStyle: 'none' } as object }),
   },
+  inputRule: { height: 1.5, borderRadius: 1, marginTop: 6 },
+  section: { gap: 10 },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sectionLabel: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 1.2 },
+  requiredBadge: { fontSize: 11, fontFamily: 'Inter_500Medium' },
+  tagGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   // Voice
   micArea: {
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingTop: 24,
-    paddingBottom: 12,
-    gap: 18,
+    paddingTop: 28,
+    paddingBottom: 8,
+    gap: 16,
     position: 'relative',
   },
-  pulseContainer: {
+  rings: {
     position: 'absolute',
-    width: 120,
-    height: 120,
-    alignItems: 'center',
-    justifyContent: 'center',
+    top: 28,
+    width: 110, height: 110,
+    alignItems: 'center', justifyContent: 'center',
   },
   pulseRing: {
     position: 'absolute',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
+    width: 110, height: 110,
+    borderRadius: 55,
     borderWidth: 2,
     borderColor: '#ffffff',
   },
   micBtn: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 100, height: 100,
+    borderRadius: 50,
+    alignItems: 'center', justifyContent: 'center',
   },
-  micLabel: {
-    fontSize: 14,
-    fontFamily: 'Inter_500Medium',
-    letterSpacing: 0.2,
-    marginTop: 4,
-  },
-  tapToStop: {
-    fontSize: 11,
-    fontFamily: 'Inter_400Regular',
-    color: '#ffffff88',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-    marginTop: -8,
-  },
-  errorMsg: {
-    fontSize: 13,
-    fontFamily: 'Inter_400Regular',
-    textAlign: 'center',
-  },
-  // Shared form
-  fieldGroup: { gap: 10 },
-  fieldHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  fieldLabel: { fontSize: 11, fontFamily: 'Inter_600SemiBold', letterSpacing: 1 },
-  required: { fontSize: 11, fontFamily: 'Inter_500Medium' },
-  tagGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
-  pickerCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 16,
+  micStatus: { fontSize: 15, fontFamily: 'Inter_600SemiBold', letterSpacing: 0.2, marginTop: 4 },
+  tapStop: { fontSize: 11, color: '#ffffff77', fontFamily: 'Inter_400Regular', letterSpacing: 0.5 },
+  transcriptWrap: { gap: 0 },
+  txHint:  { fontSize: 12, fontFamily: 'Inter_500Medium' },
+  txError: { fontSize: 12, fontFamily: 'Inter_500Medium' },
+  // Save bar
+  saveBar: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#00000011',
   },
   saveBtn: {
-    paddingVertical: 16,
-    borderRadius: 100,
+    flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 4,
+    justifyContent: 'center',
+    paddingVertical: 17,
+    borderRadius: 100,
+    gap: 8,
   },
-  saveBtnText: { fontSize: 16, fontFamily: 'Inter_700Bold' },
+  saveBtnText: { fontSize: 16, fontFamily: 'Inter_700Bold', letterSpacing: 0.1 },
 });
