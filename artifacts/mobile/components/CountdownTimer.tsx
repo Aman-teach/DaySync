@@ -7,40 +7,41 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useApp } from '@/context/AppContext';
-
-function computeMsLeft(interval: number, activeStart: number, activeEnd: number): number {
-  const now = new Date();
-  const next = new Date(now.getTime() + interval * 60 * 1000);
-  const h = next.getHours();
-  if (h < activeStart) {
-    next.setHours(activeStart, 0, 0, 0);
-  } else if (h >= activeEnd) {
-    next.setDate(next.getDate() + 1);
-    next.setHours(activeStart, 0, 0, 0);
-  }
-  return Math.max(0, next.getTime() - now.getTime());
-}
+import { getNextTargetTime } from '@/utils/time';
 
 export function CountdownTimer() {
-  const { settings } = useApp();
+  const { settings, todayEntries } = useApp();
   const colors = useColors();
-  const [msLeft, setMsLeft] = useState(() =>
-    computeMsLeft(settings.interval, settings.activeStart, settings.activeEnd)
+
+  const [targetTime, setTargetTime] = useState(() =>
+    getNextTargetTime(settings.interval, settings.activeStart, settings.activeEnd)
   );
+  
+  const [msLeft, setMsLeft] = useState(() => Math.max(0, targetTime - Date.now()));
 
   const progressVal = useSharedValue(1);
+
+  // Instantly recalculate target time if user changes settings or adds an entry
+  useEffect(() => {
+    setTargetTime(getNextTargetTime(settings.interval, settings.activeStart, settings.activeEnd));
+  }, [settings.interval, settings.activeStart, settings.activeEnd]);
 
   useEffect(() => {
     const total = settings.interval * 60 * 1000;
     const tick = () => {
-      const ms = computeMsLeft(settings.interval, settings.activeStart, settings.activeEnd);
-      setMsLeft(ms);
-      progressVal.value = withTiming(ms / total, { duration: 900 });
+      let left = Math.max(0, targetTime - Date.now());
+      if (left === 0) {
+        const nextTarget = getNextTargetTime(settings.interval, settings.activeStart, settings.activeEnd);
+        setTargetTime(nextTarget);
+        left = Math.max(0, nextTarget - Date.now());
+      }
+      setMsLeft(left);
+      progressVal.value = withTiming(left / total, { duration: 900 });
     };
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [settings]);
+  }, [targetTime, settings]);
 
   const barStyle = useAnimatedStyle(() => ({
     width: `${progressVal.value * 100}%`,
@@ -74,14 +75,15 @@ export function CountdownTimer() {
 }
 
 const styles = StyleSheet.create({
-  container: { alignItems: 'center', gap: 4 },
-  label: { fontSize: 12, fontFamily: 'Inter_400Regular', letterSpacing: 0.5 },
-  time: { fontSize: 36, fontFamily: 'Inter_700Bold', letterSpacing: -1.5 },
+  container: { alignItems: 'center', gap: 2 },
+  label: { fontSize: 13, fontFamily: 'Inter_600SemiBold', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 2 },
+  time: { fontSize: 48, fontFamily: 'Inter_700Bold', lineHeight: 48, letterSpacing: -2 },
   track: {
-    width: 120,
-    height: 3,
+    width: 100,
+    height: 4,
     borderRadius: 2,
     overflow: 'hidden',
+    marginTop: 4,
   },
-  fill: { height: 3, borderRadius: 2 },
+  fill: { height: 4, borderRadius: 2 },
 });

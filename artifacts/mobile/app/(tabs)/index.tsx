@@ -1,5 +1,6 @@
 import React, { useCallback, useRef } from 'react';
 import {
+  Alert,
   FlatList,
   Platform,
   Pressable,
@@ -18,19 +19,73 @@ import { CountdownTimer } from '@/components/CountdownTimer';
 import { EntryCard } from '@/components/EntryCard';
 import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { getDateKey } from '@/utils/helpers';
+import { getDateKey, getEntriesForDate, getDeltaScore } from '@/utils/helpers';
+import * as Haptics from 'expo-haptics';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  interpolate,
+} from 'react-native-reanimated';
 
 export default function TodayScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const router = useRouter();
-  const { todayEntries, focusScore, settings, daySummaries, generateDayWrap, isLoading, reload } =
+  const { entries, todayEntries, focusScore, settings, daySummaries, generateDayWrap, isLoading, reload } =
     useApp();
 
   const todayKey = getDateKey(new Date(), settings.dayStartHour);
   const todaySummary = daySummaries.find(s => s.dateKey === todayKey);
   const [generating, setGenerating] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [fabOpen, setFabOpen] = React.useState(false);
+  const fabAnim = useSharedValue(0);
+
+  // Live time for header
+  const [currentTime, setCurrentTime] = React.useState(new Date());
+  React.useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 60000); // update every minute
+    return () => clearInterval(timer);
+  }, []);
+
+  const toggleFab = () => {
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+    const nextState = !fabOpen;
+    setFabOpen(nextState);
+    fabAnim.value = withSpring(nextState ? 1 : 0, { damping: 15, stiffness: 200, mass: 0.8 });
+  };
+
+  const fabPlusStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${interpolate(fabAnim.value, [0, 1], [0, 45])}deg` }]
+  }));
+
+  const miniFabVoiceStyle = useAnimatedStyle(() => ({
+    opacity: fabAnim.value,
+    transform: [
+      { translateY: interpolate(fabAnim.value, [0, 1], [20, 0]) },
+      { scale: interpolate(fabAnim.value, [0, 1], [0.5, 1]) }
+    ],
+  }));
+
+  const miniFabTextStyle = useAnimatedStyle(() => ({
+    opacity: fabAnim.value,
+    transform: [
+      { translateY: interpolate(fabAnim.value, [0, 1], [40, 0]) },
+      { scale: interpolate(fabAnim.value, [0, 1], [0.5, 1]) }
+    ],
+  }));
+
+  const deltaScore = React.useMemo(() => {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayKey = getDateKey(yesterday, settings.dayStartHour);
+    const yesterdayEntries = getEntriesForDate(entries, yesterdayKey);
+    
+    // Only show delta if they actually logged something yesterday
+    if (yesterdayEntries.length === 0) return null;
+    return getDeltaScore(todayEntries, yesterdayEntries);
+  }, [entries, todayEntries, settings.dayStartHour]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -40,12 +95,21 @@ export default function TodayScreen() {
 
   const handleGenerateWrap = async () => {
     setGenerating(true);
-    await generateDayWrap(todayKey);
-    setGenerating(false);
+    try {
+      const summary = await generateDayWrap(todayKey);
+      if (!summary) {
+        if (Platform.OS === 'web') window.alert("Failed to generate Day Wrap. Ensure you have network connectivity and API keys are active.");
+        else Alert.alert("Error", "Failed to generate Day Wrap.");
+      }
+    } catch (err) {
+      if (Platform.OS === 'web') window.alert("Generation error: " + String(err));
+      else Alert.alert("Error", "Generation error: " + String(err));
+    } finally {
+      setGenerating(false);
+    }
   };
 
-  const topPad =
-    Platform.OS === 'web' ? 67 : insets.top;
+  const topPad = Platform.OS === 'web' ? 16 : insets.top;
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
@@ -61,27 +125,72 @@ export default function TodayScreen() {
       >
         {/* Header */}
         <View style={styles.header}>
-          <MascotRobot size={64} />
-          <View style={styles.titleBlock}>
-            <Text style={[styles.appName, { color: colors.primary }]}>Atlas Cadence</Text>
-            <Text style={[styles.date, { color: colors.mutedForeground }]}>
-              {new Date().toLocaleDateString([], {
-                weekday: 'long',
-                month: 'long',
-                day: 'numeric',
-              })}
-            </Text>
+          <View style={styles.headerLeft}>
+            <View style={styles.titleBlock}>
+              <Text style={[styles.appName, { color: colors.primary }]}>DaySync</Text>
+              <Text style={[styles.date, { color: colors.mutedForeground }]}>
+                {currentTime.toLocaleDateString('en-US', {
+                  weekday: 'long',
+                  month: 'long',
+                  day: 'numeric',
+                })} • {currentTime.toLocaleTimeString('en-US', {
+                  hour: 'numeric',
+                  minute: '2-digit',
+                  hour12: true
+                })}
+              </Text>
+            </View>
           </View>
+          <TouchableOpacity onPress={() => router.push('/settings')} style={styles.settingsBtn}>
+            <Feather name="settings" size={24} color={colors.foreground} />
+          </TouchableOpacity>
         </View>
 
         {/* Score + Countdown card */}
         <View style={[styles.statsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.scoreBlock}>
-            <Text style={[styles.scoreNum, { color: colors.primary }]}>{focusScore}</Text>
-            <Text style={[styles.scoreLabel, { color: colors.mutedForeground }]}>Focus Score</Text>
+          <View style={styles.statsRow}>
+            <View style={styles.scoreBlock}>
+              <Text style={[styles.scoreLabel, { color: colors.mutedForeground }]}>FOCUS SCORE</Text>
+              <View style={styles.scoreNumberRow}>
+                <Text style={[styles.scoreNum, { color: colors.primary }]}>{focusScore}</Text>
+                {deltaScore !== null && (
+                  <View style={[
+                    styles.deltaBadge, 
+                    { backgroundColor: deltaScore >= 0 ? '#10B98115' : '#EF444415' }
+                  ]}>
+                    <Feather 
+                      name={deltaScore >= 0 ? "trending-up" : "trending-down"} 
+                      size={12} 
+                      color={deltaScore >= 0 ? '#10B981' : '#EF4444'} 
+                    />
+                    <Text style={[
+                      styles.deltaText, 
+                      { color: deltaScore >= 0 ? '#10B981' : '#EF4444' }
+                    ]}>
+                      {deltaScore >= 0 ? '+' : ''}{deltaScore}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </View>
+
+            <View style={[styles.divider, { backgroundColor: colors.border }]} />
+            
+            <View style={styles.timerBlock}>
+              <CountdownTimer />
+            </View>
           </View>
-          <View style={[styles.divider, { backgroundColor: colors.border }]} />
-          <CountdownTimer />
+          
+          <View style={[styles.motivationFooter, { backgroundColor: colors.primary + '10' }]}>
+            <Feather name="zap" size={14} color={colors.primary} />
+            <Text style={[styles.motivationText, { color: colors.primary }]}>
+              {focusScore > 75 
+                ? "You're absolutely in the zone today. Keep that momentum going!" 
+                : focusScore > 40 
+                  ? "Building solid momentum. Let's lock in for another deep session." 
+                  : "Every big day starts with a single step. Ready to focus?"}
+            </Text>
+          </View>
         </View>
 
         {/* Quick Log CTA */}
@@ -127,29 +236,64 @@ export default function TodayScreen() {
         </View>
 
         {/* Day Wrap */}
-        {(todayEntries.length >= 3) && (
+        {todayEntries.length >= 3 && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
-                Day Wrap
+                Execution Guide
               </Text>
             </View>
             {todaySummary ? (
-              <View style={[styles.wrapCard, { backgroundColor: colors.card, borderColor: colors.primary + '44' }]}>
+              <View style={[styles.wrapCard, { backgroundColor: colors.card, borderColor: colors.primary + '33' }]}>
                 <Text style={[styles.wrapSummary, { color: colors.foreground }]}>
                   {todaySummary.summary}
                 </Text>
-                {todaySummary.highlights.map((h, i) => (
-                  <View key={i} style={styles.highlight}>
-                    <View style={[styles.highlightDot, { backgroundColor: colors.accent }]} />
-                    <Text style={[styles.highlightText, { color: colors.foreground }]}>{h}</Text>
+                
+                {/* Highlights */}
+                {todaySummary.highlights && todaySummary.highlights.length > 0 && (
+                  <View style={styles.wrapSection}>
+                    <Text style={[styles.wrapSectionLabel, { color: colors.mutedForeground }]}>TODAY'S WINS</Text>
+                    {todaySummary.highlights.map((h, i) => (
+                      <View key={i} style={styles.highlight}>
+                        <Feather name="check" size={14} color="#52B788" style={styles.highlightIcon} />
+                        <Text style={[styles.highlightText, { color: colors.foreground }]}>{h}</Text>
+                      </View>
+                    ))}
                   </View>
-                ))}
+                )}
+
+                {/* Anomalies */}
+                {todaySummary.anomalies && todaySummary.anomalies.length > 0 && (
+                  <View style={styles.wrapSection}>
+                    <Text style={[styles.wrapSectionLabel, { color: colors.mutedForeground }]}>DISTRACTIONS & LEAKS</Text>
+                    {todaySummary.anomalies.map((a, i) => (
+                       <View key={i} style={styles.highlight}>
+                         <Feather name="alert-circle" size={14} color="#EF4444" style={styles.highlightIcon} />
+                         <Text style={[styles.highlightText, { color: colors.foreground }]}>{a}</Text>
+                       </View>
+                    ))}
+                  </View>
+                )}
+
+                {/* Guide Advice */}
+                {todaySummary.guideAdvice ? (
+                  <View style={[styles.adviceCard, { backgroundColor: colors.primary + '11', borderColor: colors.primary + '33' }]}>
+                    <View style={styles.adviceHeader}>
+                      <Feather name="compass" size={13} color={colors.primary} />
+                      <Text style={[styles.adviceTitle, { color: colors.primary }]}>TOMORROW'S NAVIGATOR</Text>
+                    </View>
+                    <Text style={[styles.adviceText, { color: colors.foreground }]}>
+                      {todaySummary.guideAdvice}
+                    </Text>
+                  </View>
+                ) : null}
+
                 {todaySummary.mood ? (
-                  <Text style={[styles.mood, { color: colors.mutedForeground }]}>
-                    {todaySummary.mood}
+                  <Text style={[styles.mood, { color: colors.mutedForeground, marginTop: 4 }]}>
+                    ⚡ {todaySummary.mood}
                   </Text>
                 ) : null}
+
                 <TouchableOpacity
                   style={[styles.regenBtn, { borderColor: colors.border }]}
                   onPress={handleGenerateWrap}
@@ -182,17 +326,39 @@ export default function TodayScreen() {
         style={[
           styles.fab,
           {
-            bottom: Platform.OS === 'web' ? 34 + 84 : insets.bottom + 88,
+            bottom: Platform.OS === 'web' ? 90 : insets.bottom + 70,
             right: 20,
           },
         ]}
       >
+        <>
+          <Animated.View style={miniFabTextStyle} pointerEvents={fabOpen ? 'auto' : 'none'}>
+            <TouchableOpacity
+              style={[styles.miniFab, { backgroundColor: colors.card, borderColor: colors.border }]}
+              onPress={() => { try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}; toggleFab(); router.push({ pathname: '/checkin', params: { mode: 'text' } }); }}
+              activeOpacity={0.8}
+            >
+              <Feather name="edit-2" size={20} color={colors.foreground} />
+            </TouchableOpacity>
+          </Animated.View>
+          <Animated.View style={miniFabVoiceStyle} pointerEvents={fabOpen ? 'auto' : 'none'}>
+            <TouchableOpacity
+              style={[styles.miniFab, { backgroundColor: colors.card, borderColor: colors.border }]}
+              onPress={() => { try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}; toggleFab(); router.push({ pathname: '/checkin', params: { mode: 'voice', autoStart: 'true' } }); }}
+              activeOpacity={0.8}
+            >
+              <Feather name="mic" size={20} color={colors.foreground} />
+            </TouchableOpacity>
+          </Animated.View>
+        </>
         <TouchableOpacity
           style={[styles.fabBtn, { backgroundColor: colors.primary }]}
-          onPress={() => router.push('/checkin')}
+          onPress={toggleFab}
           activeOpacity={0.85}
         >
-          <Feather name="plus" size={26} color="#fff" />
+          <Animated.View style={fabPlusStyle}>
+            <Feather name="plus" size={26} color="#fff" />
+          </Animated.View>
         </TouchableOpacity>
       </View>
     </View>
@@ -202,22 +368,66 @@ export default function TodayScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1 },
   scroll: { paddingHorizontal: 20, gap: 16 },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingBottom: 4 },
-  titleBlock: { flex: 1 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: 4,
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    flex: 1,
+  },
+  settingsBtn: {
+    padding: 8,
+  },
+  titleBlock: { flexShrink: 1 },
   appName: { fontSize: 22, fontFamily: 'Inter_700Bold', letterSpacing: -0.5 },
   date: { fontSize: 13, fontFamily: 'Inter_400Regular', marginTop: 2 },
   statsCard: {
-    flexDirection: 'row',
     borderRadius: 18,
     borderWidth: 1,
-    padding: 20,
-    alignItems: 'center',
-    gap: 20,
+    overflow: 'hidden',
   },
-  scoreBlock: { alignItems: 'center', flex: 1 },
-  scoreNum: { fontSize: 48, fontFamily: 'Inter_700Bold', letterSpacing: -2 },
-  scoreLabel: { fontSize: 12, fontFamily: 'Inter_500Medium', marginTop: -4 },
-  divider: { width: 1, height: 48 },
+  statsRow: {
+    flexDirection: 'row',
+    padding: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  motivationFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    gap: 8,
+  },
+  motivationText: {
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    textAlign: 'center',
+  },
+  scoreBlock: { flex: 1, alignItems: 'center', gap: 2, paddingRight: 16 },
+  timerBlock: { flex: 1, alignItems: 'center', paddingLeft: 16 },
+  divider: { width: 1.5, height: 56 },
+  scoreNumberRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  scoreNum: { fontSize: 48, fontFamily: 'Inter_700Bold', lineHeight: 48, letterSpacing: -2 },
+  deltaBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  deltaText: {
+    fontSize: 13,
+    fontFamily: 'Inter_700Bold',
+  },
+  scoreLabel: { fontSize: 13, fontFamily: 'Inter_600SemiBold', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 2 },
   logButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -256,10 +466,22 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 10,
   },
-  wrapSummary: { fontSize: 14, fontFamily: 'Inter_500Medium', lineHeight: 21 },
-  highlight: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
-  highlightDot: { width: 6, height: 6, borderRadius: 3, marginTop: 7 },
-  highlightText: { flex: 1, fontSize: 13, fontFamily: 'Inter_400Regular', lineHeight: 20 },
+  wrapSummary: { fontSize: 15, fontFamily: 'Inter_500Medium', lineHeight: 23, marginBottom: 4 },
+  wrapSection: { gap: 6, marginTop: 8 },
+  wrapSectionLabel: { fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 1.1, textTransform: 'uppercase', opacity: 0.8 },
+  highlight: { flexDirection: 'row', gap: 6, alignItems: 'center' },
+  highlightIcon: { marginTop: 1 },
+  highlightText: { flex: 1, fontSize: 13, fontFamily: 'Inter_400Regular', lineHeight: 18 },
+  adviceCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 12,
+    gap: 6,
+    marginTop: 10,
+  },
+  adviceHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  adviceTitle: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 0.8 },
+  adviceText: { fontSize: 13, fontFamily: 'Inter_500Medium', lineHeight: 19 },
   mood: { fontSize: 12, fontFamily: 'Inter_400Regular', fontStyle: 'italic' },
   regenBtn: {
     alignSelf: 'flex-end',
@@ -279,7 +501,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   generateText: { fontSize: 14, fontFamily: 'Inter_600SemiBold' },
-  fab: { position: 'absolute' },
+  fab: { position: 'absolute', alignItems: 'center', gap: 12 },
   fabBtn: {
     width: 58,
     height: 58,
@@ -288,4 +510,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     elevation: 8,
   },
+  miniFab: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+  }
 });

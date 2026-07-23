@@ -11,7 +11,8 @@ import {
   Inter_700Bold,
   useFonts,
 } from '@expo-google-fonts/inter';
-import { Stack } from 'expo-router';
+import { AuthProvider, useAuth } from '@/context/AuthContext';
+import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { AppProvider } from '@/context/AppContext';
 
@@ -19,9 +20,30 @@ SplashScreen.preventAutoHideAsync();
 
 const queryClient = new QueryClient();
 
+function useProtectedRoute() {
+  const { user, isLoading } = useAuth();
+  const segments = useSegments();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (isLoading) return;
+
+    const inAuthGroup = segments[0] === '(auth)';
+
+    if (!user && !inAuthGroup) {
+      router.replace('/(auth)/login');
+    } else if (user && inAuthGroup) {
+      router.replace('/(tabs)');
+    }
+  }, [user, isLoading, segments]);
+}
+
 function RootLayoutNav() {
+  useProtectedRoute();
+  
   return (
     <Stack screenOptions={{ headerBackTitle: 'Back' }}>
+      <Stack.Screen name="(auth)" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen
         name="checkin"
@@ -29,6 +51,18 @@ function RootLayoutNav() {
       />
       <Stack.Screen
         name="edit-entry"
+        options={{ presentation: 'modal', headerShown: false, gestureEnabled: true }}
+      />
+      <Stack.Screen
+        name="history/[date]"
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="compare"
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="settings"
         options={{ presentation: 'modal', headerShown: false, gestureEnabled: true }}
       />
     </Stack>
@@ -57,9 +91,11 @@ export default function RootLayout() {
         <QueryClientProvider client={queryClient}>
           <GestureHandlerRootView style={{ flex: 1 }}>
             <KeyboardProvider>
-              <AppProvider>
-                <RootLayoutNav />
-              </AppProvider>
+              <AuthProvider>
+                <AppProvider>
+                  <RootLayoutNav />
+                </AppProvider>
+              </AuthProvider>
             </KeyboardProvider>
           </GestureHandlerRootView>
         </QueryClientProvider>

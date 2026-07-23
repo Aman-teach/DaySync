@@ -1,10 +1,10 @@
 import React from 'react';
 import { Platform, StyleSheet, useColorScheme, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
-import { Feather } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { Tabs } from 'expo-router';
-import { SymbolView } from 'expo-symbols';
+import { SymbolView, SFSymbol } from 'expo-symbols';
 
 export default function TabLayout() {
   const colors = useColors();
@@ -20,7 +20,7 @@ export default function TabLayout() {
         tabBarInactiveTintColor: colors.mutedForeground,
         headerShown: false,
         tabBarStyle: {
-          position: 'absolute',
+          position: isIOS ? 'absolute' : undefined,
           backgroundColor: isIOS ? 'transparent' : colors.background,
           borderTopWidth: isWeb ? 1 : 0,
           borderTopColor: colors.border,
@@ -42,11 +42,11 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'Today',
-          tabBarIcon: ({ color }) =>
+          tabBarIcon: ({ color, focused }) =>
             isIOS ? (
-              <SymbolView name="sun.max" tintColor={color} size={24} />
+              <SymbolView name={focused ? "calendar.circle.fill" : "calendar.circle" as SFSymbol} tintColor={color} size={24} />
             ) : (
-              <Feather name="sun" size={22} color={color} />
+              <Ionicons name={focused ? "calendar" : "calendar-outline"} size={22} color={color} />
             ),
         }}
       />
@@ -54,11 +54,11 @@ export default function TabLayout() {
         name="tower"
         options={{
           title: 'Tower',
-          tabBarIcon: ({ color }) =>
+          tabBarIcon: ({ color, focused }) =>
             isIOS ? (
-              <SymbolView name="building.2" tintColor={color} size={24} />
+              <SymbolView name={focused ? "square.stack.3d.up.fill" : "square.stack.3d.up" as SFSymbol} tintColor={color} size={24} />
             ) : (
-              <Feather name="layers" size={22} color={color} />
+              <Ionicons name={focused ? "albums" : "albums-outline"} size={22} color={color} />
             ),
         }}
       />
@@ -66,23 +66,23 @@ export default function TabLayout() {
         name="stats"
         options={{
           title: 'Stats',
-          tabBarIcon: ({ color }) =>
+          tabBarIcon: ({ color, focused }) =>
             isIOS ? (
-              <SymbolView name="chart.bar" tintColor={color} size={24} />
+              <SymbolView name={focused ? "chart.pie.fill" : "chart.pie" as SFSymbol} tintColor={color} size={24} />
             ) : (
-              <Feather name="bar-chart-2" size={22} color={color} />
+              <Ionicons name={focused ? "stats-chart" : "stats-chart-outline"} size={22} color={color} />
             ),
         }}
       />
       <Tabs.Screen
-        name="settings"
+        name="history"
         options={{
-          title: 'Settings',
-          tabBarIcon: ({ color }) =>
+          title: 'History',
+          tabBarIcon: ({ color, focused }) =>
             isIOS ? (
-              <SymbolView name="gearshape" tintColor={color} size={24} />
+              <SymbolView name={focused ? "clock.fill" : "clock" as SFSymbol} tintColor={color} size={24} />
             ) : (
-              <Feather name="settings" size={22} color={color} />
+              <Ionicons name={focused ? "time" : "time-outline"} size={22} color={color} />
             ),
         }}
       />

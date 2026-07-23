@@ -1,121 +1,99 @@
-import React, { useEffect, useRef } from 'react';
-import {
-  LayoutChangeEvent,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import React from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
+  withTiming,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { useColors } from '@/hooks/useColors';
 import { FocusLevel, EnergyLevel } from '@/types';
+import { Feather } from '@expo/vector-icons';
+import { ScoreImpactPreview } from '@/components/ScoreImpactPreview';
 
-const FOCUS_OPTIONS: { value: FocusLevel; label: string; color: string; emoji: string }[] = [
-  { value: 'deep',  label: 'Deep',  emoji: '⚡', color: '#2D6A4F' },
-  { value: 'light', label: 'Light', emoji: '🌤', color: '#D97706' },
-  { value: 'off',   label: 'Off',   emoji: '💤', color: '#6B7280' },
+const FOCUS_OPTIONS: { value: FocusLevel; label: string; sub: string; color: string; icon: keyof typeof Feather.glyphMap }[] = [
+  { value: 'deep',    label: 'Deep',    sub: 'In the zone',    icon: 'zap',    color: '#4F46E5' }, // Electric Indigo: Intense psychological flow state
+  { value: 'light',   label: 'Light',   sub: 'Casual mode',    icon: 'sun',    color: '#0891B2' }, // Vibrant Cyan: Breezy, energetic but calm
+  { value: 'neutral', label: 'Neutral', sub: 'Routine/Life',   icon: 'coffee', color: '#64748B' }, // Slate Gray: Grounding, routine, balanced
+  { value: 'off',     label: 'Off',     sub: 'Mind elsewhere', icon: 'moon',   color: '#3F3F46' }, // Dark Zinc: Muted, disconnected
 ];
 
-const ENERGY_OPTIONS: { value: EnergyLevel; label: string; emoji: string }[] = [
-  { value: 'high', label: 'High', emoji: '🔋' },
-  { value: 'low',  label: 'Low',  emoji: '🪫' },
+const ENERGY_OPTIONS: { value: EnergyLevel; label: string; sub: string; icon: keyof typeof Feather.glyphMap; color: string }[] = [
+  { value: 'high', label: 'High', sub: 'Energized',  icon: 'battery-charging', color: '#10B981' }, // Vibrant Emerald
+  { value: 'low',  label: 'Low',  sub: 'Running low', icon: 'battery',          color: '#F59E0B' }, // Amber Warning
 ];
 
-// ─── Animated segmented control ─────────────────────────────────────────────
-function SegmentedPicker<T extends string>({
-  options,
-  value,
-  onChange,
-  activeColor,
+// ─── Solid Tile-style option ─────────────────────────────────────────────
+function OptionPill<T extends string>({
+  opt,
+  isActive,
+  onPress,
+  isRecording,
+  flex,
 }: {
-  options: { value: T; label: string; emoji: string; color?: string }[];
-  value: T;
-  onChange: (v: T) => void;
-  activeColor?: string;
+  opt: { value: T; label: string; sub: string; icon: keyof typeof Feather.glyphMap; color: string };
+  isActive: boolean;
+  onPress: () => void;
+  isRecording?: boolean;
+  flex?: number;
 }) {
   const colors = useColors();
-  const segX     = useSharedValue(0);
-  const segWidth = useSharedValue(0);
-  const containerW = useSharedValue(0);
-  const measured   = useRef(false);
+  const scale = useSharedValue(1);
+  const bgAnim = useSharedValue(isActive ? 1 : 0);
 
-  const currentIdx = options.findIndex(o => o.value === value);
+  React.useEffect(() => {
+    bgAnim.value = withTiming(isActive ? 1 : 0, { duration: 200 });
+  }, [isActive]);
 
-  const slide = (idx: number) => {
-    const w = containerW.value / options.length;
-    segX.value    = withSpring(idx * w, { damping: 18, stiffness: 260 });
-    segWidth.value = withSpring(w,      { damping: 18, stiffness: 260 });
-  };
+  const handlePressIn = () => { scale.value = withSpring(0.92, { damping: 15, stiffness: 350 }); };
+  const handlePressOut = () => { scale.value = withSpring(1, { damping: 12, stiffness: 250 }); };
 
-  const onLayout = (e: LayoutChangeEvent) => {
-    const w = e.nativeEvent.layout.width;
-    containerW.value = w;
-    // Only snap on first measure
-    if (!measured.current) {
-      measured.current = true;
-      const idx = options.findIndex(o => o.value === value);
-      segX.value    = (idx * w) / options.length;
-      segWidth.value = w / options.length;
-    }
-  };
-
-  useEffect(() => {
-    if (measured.current) {
-      slide(currentIdx);
-    }
-  }, [value]);
-
-  const pillStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: segX.value }],
-    width: segWidth.value,
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
   }));
 
-  return (
-    <View
-      style={[styles.segTrack, { backgroundColor: colors.muted }]}
-      onLayout={onLayout}
-    >
-      {/* Sliding background pill */}
-      <Animated.View
-        style={[
-          styles.segPill,
-          { backgroundColor: activeColor ?? colors.primary },
-          pillStyle,
-        ]}
-        pointerEvents="none"
-      />
+  const activeColor = opt.color;
+  
+  // To match the tags UI:
+  // Active: Solid color, no visible border contrast, white text
+  // Inactive: Pastel background, colored border, colored text
+  const bg = isActive ? activeColor : (isRecording ? '#ffffff11' : activeColor + '15');
+  const border = isActive ? activeColor : (isRecording ? '#ffffff22' : activeColor + '44');
+  
+  const textColor = isActive ? '#FFFFFF' : (isRecording ? '#ffffff88' : activeColor);
+  const iconColor = isActive ? '#FFFFFF' : (isRecording ? '#ffffff66' : activeColor);
 
-      {/* Options */}
-      {options.map((opt, i) => {
-        const active = opt.value === value;
-        return (
-          <Pressable
-            key={opt.value}
-            style={styles.segOption}
-            onPress={() => {
-              if (active) return;
-              try { Haptics.selectionAsync(); } catch {}
-              onChange(opt.value);
-            }}
-          >
-            <Text style={styles.segEmoji}>{opt.emoji}</Text>
-            <Text
-              style={[
-                styles.segLabel,
-                { color: active ? '#fff' : colors.mutedForeground },
-              ]}
-            >
-              {opt.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
+  return (
+    <Pressable
+      style={{ flex: flex ?? 1 }}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      onPress={() => {
+        if (!isActive) {
+          try { Haptics.selectionAsync(); } catch {}
+          onPress();
+        }
+      }}
+    >
+      <Animated.View style={[
+        styles.pill,
+        {
+          backgroundColor: bg,
+          borderColor: border,
+          borderWidth: isActive ? 0 : 1.5,
+          // When active borderWidth is 0, we add 1.5px padding to prevent layout shift
+          paddingVertical: isActive ? 9.5 : 8,
+          paddingHorizontal: isActive ? 7.5 : 6,
+        },
+        animatedStyle
+      ]}>
+        <Feather name={opt.icon} size={15} color={iconColor} />
+        <Text style={[styles.pillLabel, { color: textColor }]} numberOfLines={1}>
+          {opt.label}
+        </Text>
+      </Animated.View>
+    </Pressable>
   );
 }
 
@@ -125,7 +103,7 @@ interface Props {
   energy:         EnergyLevel;
   onFocusChange:  (f: FocusLevel)  => void;
   onEnergyChange: (e: EnergyLevel) => void;
-  tintOnDark?: boolean;
+  isRecording?:   boolean;
 }
 
 export function FocusEnergyPicker({
@@ -133,34 +111,54 @@ export function FocusEnergyPicker({
   energy,
   onFocusChange,
   onEnergyChange,
-  tintOnDark,
+  isRecording,
 }: Props) {
   const colors = useColors();
-  const focusColor = FOCUS_OPTIONS.find(o => o.value === focus)?.color ?? colors.primary;
 
   return (
     <View style={styles.container}>
-      <View style={styles.row}>
-        <Text style={[styles.rowLabel, { color: colors.mutedForeground }]}>Focus</Text>
-        <View style={{ flex: 1 }}>
-          <SegmentedPicker
-            options={FOCUS_OPTIONS}
-            value={focus}
-            onChange={onFocusChange}
-            activeColor={focusColor}
-          />
+      {/* Focus */}
+      <View style={styles.group}>
+        <View style={styles.groupHeader}>
+          <Text style={[styles.groupLabel, { color: isRecording ? '#ffffffcc' : colors.mutedForeground }]}>Focus Level</Text>
+          <ScoreImpactPreview focus={focus} />
+        </View>
+        <View style={styles.row}>
+          {FOCUS_OPTIONS.map(opt => (
+            <OptionPill
+              key={opt.value}
+              opt={opt}
+              isActive={focus === opt.value}
+              onPress={() => {
+                if (focus !== opt.value) {
+                  try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+                }
+                onFocusChange(opt.value);
+              }}
+              isRecording={isRecording}
+            />
+          ))}
         </View>
       </View>
 
-      <View style={styles.row}>
-        <Text style={[styles.rowLabel, { color: colors.mutedForeground }]}>Energy</Text>
-        <View style={{ flex: 1 }}>
-          <SegmentedPicker
-            options={ENERGY_OPTIONS}
-            value={energy}
-            onChange={onEnergyChange}
-            activeColor={colors.primary}
-          />
+      {/* Energy */}
+      <View style={styles.group}>
+        <Text style={[styles.groupLabel, { color: isRecording ? '#ffffffcc' : colors.mutedForeground }]}>Energy Level</Text>
+        <View style={styles.row}>
+          {ENERGY_OPTIONS.map(opt => (
+            <OptionPill
+              key={opt.value}
+              opt={opt}
+              isActive={energy === opt.value}
+              onPress={() => {
+                if (energy !== opt.value) {
+                  try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+                }
+                onEnergyChange(opt.value);
+              }}
+              isRecording={isRecording}
+            />
+          ))}
         </View>
       </View>
     </View>
@@ -168,37 +166,23 @@ export function FocusEnergyPicker({
 }
 
 const styles = StyleSheet.create({
-  container: { gap: 12 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  rowLabel: {
-    fontSize: 11,
+  container: { gap: 16 },
+  group: { gap: 8 },
+  groupHeader: { flexDirection: 'row', alignItems: 'center', paddingRight: 4 },
+  groupLabel: {
+    fontSize: 10,
     fontFamily: 'Inter_600SemiBold',
     letterSpacing: 0.8,
     textTransform: 'uppercase',
-    width: 56,
+    marginLeft: 2,
   },
-  segTrack: {
-    flexDirection: 'row',
-    borderRadius: 14,
-    padding: 3,
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  segPill: {
-    position: 'absolute',
-    top: 3,
-    bottom: 3,
-    borderRadius: 11,
-  },
-  segOption: {
-    flex: 1,
+  row: { flexDirection: 'row', gap: 6 },
+  pill: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
-    gap: 5,
-    zIndex: 1,
+    borderRadius: 100, // Fully rounded like the tags
+    gap: 6,
   },
-  segEmoji: { fontSize: 13, includeFontPadding: false } as object,
-  segLabel: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+  pillLabel: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
 });

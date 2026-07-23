@@ -22,12 +22,13 @@ router.post("/", async (req, res) => {
     return;
   }
 
-  if (!process.env["OPENAI_API_KEY"]) {
-    res.status(503).json({ error: "AI service not configured" });
-    return;
-  }
+  const apiKey = process.env["OPENAI_API_KEY"] || "";
+  const isOpenRouter = apiKey.startsWith("sk-or-");
 
-  const openai = new OpenAI({ apiKey: process.env["OPENAI_API_KEY"] });
+  const openai = new OpenAI({
+    apiKey,
+    baseURL: isOpenRouter ? "https://openrouter.ai/api/v1" : undefined,
+  });
 
   const entryLines = entries.map((e) => {
     const time = new Date(e.createdAt).toLocaleTimeString([], {
@@ -45,13 +46,16 @@ router.post("/", async (req, res) => {
   }
 
   const systemPrompt =
-    "You are a concise personal productivity analyst. The user tracks how they spend their time using periodic check-ins. Analyze their log and return a terse, honest JSON summary. No motivational fluff. No invented activities. Cite only what is in the log.";
+    "You are the user's high-performance execution guide. Your job is to analyze their logs, tell them honestly how they navigated their day, and give them direct, fluff-free advice to execute better tomorrow. Follow these voice guidelines strictly:\n" +
+    "1. Never use generic AI transitions or filler (e.g., avoid 'stands as', 'testament to', 'not just X but Y' parallelisms).\n" +
+    "2. Speak in a direct, specfic, and genuine human tone. Be opinionated but objective.\n" +
+    "3. Focus on concrete execution patterns, productivity leaks, and actionable coaching directives. Avoid sycophancy or fake motivation.";
 
-  const userPrompt = `Daily log for ${dateKey}:\n\n${entryLines.join("\n")}\n\nTag totals (minutes): ${JSON.stringify(tagTotals)}\n\nReturn a JSON object with exactly these fields:\n{\n  "summary": "1-2 sentences honest summary of the day",\n  "highlights": ["3-5 concrete specifics from the log"],\n  "tagBreakdown": {"tag_id": minutes_number},\n  "focusStreaks": [lengths_of_consecutive_deep_blocks_as_numbers],\n  "mood": "1 brief sentence on energy/mood signal",\n  "anomalies": ["notable patterns or gaps, if any"]\n}\n\nOnly include tags from the log. tagBreakdown values must be numbers. Be terse.`;
+  const userPrompt = `Here is the daily check-in log for ${dateKey}:\n\n${entryLines.join("\n")}\n\nTag totals (minutes): ${JSON.stringify(tagTotals)}\n\nAnalyze this data and return a JSON object with exactly these fields (values must be highly specific to this log):\n{\n  "summary": "Direct, specific assessment of how they managed their time today (1-2 sentences)",\n  "highlights": ["2-3 concrete wins/focus accomplishments from the log"],\n  "tagBreakdown": {"tag_id": minutes_number},\n  "focusStreaks": [consecutive_deep_blocks_as_numbers],\n  "mood": "Brief summary of their energy patterns",\n  "anomalies": ["notable gaps, context switches, or distractions observed"],\n  "guideAdvice": "One highly actionable, specific piece of advice for tomorrow to improve execution (1 sentence)"\n}`;
 
   try {
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: isOpenRouter ? "google/gemma-2-9b-it:free" : "gpt-4o-mini",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },

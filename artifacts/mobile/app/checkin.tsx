@@ -1,7 +1,8 @@
 /**
- * Check-in modal — Text + Voice tabs, sticky save, spring animations.
+ * Check-in modal — completely redesigned premium UI
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Voice } from '../utils/voice';
 import {
   Alert,
   Dimensions,
@@ -14,6 +15,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  Image,
 } from 'react-native';
 import Animated, {
   interpolateColor,
@@ -28,26 +30,25 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { useApp } from '@/context/AppContext';
-import { TAGS } from '@/constants/tags';
+import { uploadImageToAppwrite } from '@/utils/upload';
+import { saveCheckinDraft, loadCheckinDraft, clearCheckinDraft } from '@/utils/storage';
 import { getRandomPrompt } from '@/constants/prompts';
 import { FocusEnergyPicker } from '@/components/FocusEnergyPicker';
 import { TagChip } from '@/components/TagChip';
 import { Feather } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import * as FileSystem from 'expo-file-system';
+import * as ImagePicker from 'expo-image-picker';
 import { FocusLevel, EnergyLevel } from '@/types';
+import { functions, APPWRITE_CONFIG, ExecutionMethod } from '@/lib/appwrite';
 
-let AudioModule: typeof import('expo-av') | null = null;
-if (Platform.OS !== 'web') {
-  try { AudioModule = require('expo-av'); } catch {}
-}
+import { Audio } from 'expo-av';
 
 type VoiceState = 'idle' | 'recording' | 'processing' | 'transcribed';
 type Mode = 'text' | 'voice';
 
 const PROMPT = getRandomPrompt();
-const { width: SW, height: SH } = Dimensions.get('screen');
+const { width: SW } = Dimensions.get('screen');
 
 // ─── Pulse ring ──────────────────────────────────────────────────────────────
 function PulseRing({ delay, active }: { delay: number; active: boolean }) {
@@ -58,7 +59,7 @@ function PulseRing({ delay, active }: { delay: number; active: boolean }) {
     if (active) {
       scale.value   = withDelay(delay, withRepeat(withTiming(1, { duration: 1700 }), -1, false));
       opacity.value = withDelay(delay, withRepeat(
-        withSequence(withTiming(0.5, { duration: 150 }), withTiming(0, { duration: 1550 })),
+        withSequence(withTiming(0.4, { duration: 150 }), withTiming(0, { duration: 1550 })),
         -1, false
       ));
     } else {
@@ -74,7 +75,7 @@ function PulseRing({ delay, active }: { delay: number; active: boolean }) {
   return <Animated.View pointerEvents="none" style={[styles.pulseRing, s]} />;
 }
 
-// ─── Animated tab switcher ───────────────────────────────────────────────────
+// ─── Mode tab pill ───────────────────────────────────────────────────────────
 function ModeTabs({
   mode,
   onSwitch,
@@ -108,7 +109,6 @@ function ModeTabs({
 
   return (
     <View style={[styles.tabs, { backgroundColor: isRecording ? '#ffffff18' : colors.muted }]}>
-      {/* Sliding pill */}
       <Animated.View
         pointerEvents="none"
         style={[
@@ -142,28 +142,93 @@ export default function CheckinScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const router = useRouter();
-  const { addEntry, lastFocus, settings } = useApp();
+  const { addEntry, lastFocus, settings, tags, tasks, entries } = useApp();
 
-  const [mode,        setMode]        = useState<Mode>('text');
+  const { mode: initialMode, autoStart } = useLocalSearchParams<{ mode: Mode; autoStart?: string }>();
+  const [mode,        setMode]        = useState<Mode>(initialMode ?? 'text');
+  const [step,        setStep]        = useState<1 | 2>(1);
   const [voiceState,  setVoiceState]  = useState<VoiceState>('idle');
   const [text,        setText]        = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [focus,  setFocus]  = useState<FocusLevel>(lastFocus.focus);
   const [energy, setEnergy] = useState<EnergyLevel>(lastFocus.energy);
+  const [leverage, setLeverage] = useState<'high' | 'busywork' | undefined>();
+  const [customDuration, setCustomDuration] = useState<number | undefined>();
+  const [taskId, setTaskId] = useState<string | undefined>();
+  const [taskTitle, setTaskTitle] = useState<string | undefined>();
+  const [imageUrl, setImageUrl] = useState<string | undefined>();
+  const [showTaskList, setShowTaskList] = useState(false);
   const [saving,    setSaving]    = useState(false);
   const [elapsed,   setElapsed]   = useState(0);
   const [txError,   setTxError]   = useState('');
 
-  const recordingRef  = useRef<InstanceType<typeof import('expo-av').Audio.Recording> | null>(null);
+  const recordingRef  = useRef<any>(null);
   const timerRef      = useRef<ReturnType<typeof setInterval> | null>(null);
   const inputRef      = useRef<TextInput>(null);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Setup Voice listeners for native
+  useEffect(() => {
+    if (Platform.OS !== 'web') {
+      Voice.onSpeechResults = (e: any) => {
+        if (e.value && e.value.length > 0) setText(e.value[0]);
+      };
+      Voice.onSpeechPartialResults = (e: any) => {
+        if (e.value && e.value.length > 0) setText(e.value[0]);
+      };
+      Voice.onSpeechError = (e: any) => {
+        setTxError(e.error?.message || 'Error transcribing');
+      };
+    }
+    return () => {
+      if (Platform.OS !== 'web') {
+        Voice.destroy().then(Voice.removeAllListeners);
+      }
+    };
+  }, []);
+
+  // ── Restore draft on mount (handles OS app-kill while in gallery) ──────────
+  useEffect(() => {
+    loadCheckinDraft().then(draft => {
+      if (!draft) return;
+      if (draft.text)          setText(draft.text);
+      if (draft.selectedTags?.length) setSelectedTags(draft.selectedTags);
+      if (draft.focus)         setFocus(draft.focus as FocusLevel);
+      if (draft.energy)        setEnergy(draft.energy as EnergyLevel);
+      if (draft.leverage)      setLeverage(draft.leverage as 'high' | 'busywork');
+      if (draft.customDuration) setCustomDuration(draft.customDuration);
+      if (draft.taskId)        setTaskId(draft.taskId);
+      if (draft.taskTitle)     setTaskTitle(draft.taskTitle);
+      if (draft.imageUrl)      setImageUrl(draft.imageUrl);
+    });
+  }, []);
 
   // Animations
   const greenAnim  = useSharedValue(0);
   const micScale   = useSharedValue(1);
   const saveScale  = useSharedValue(1);
 
-  useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
+  // ── Auto-save draft whenever any field changes (debounced 500ms) ──────────
+  useEffect(() => {
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(() => {
+      // Only persist remote URLs — local temp URIs are ephemeral and will break after OS cache clean
+      const persistedImageUrl = imageUrl?.startsWith('https://') ? imageUrl : undefined;
+      saveCheckinDraft({ text, selectedTags, focus, energy, leverage, customDuration, taskId, taskTitle, imageUrl: persistedImageUrl });
+    }, 500);
+    return () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current); };
+  }, [text, selectedTags, focus, energy, leverage, customDuration, taskId, taskTitle, imageUrl]);
+
+  useEffect(() => () => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (recordingRef.current) {
+      if (Platform.OS === 'web') {
+        recordingRef.current.stop();
+      } else {
+        Voice.stop().catch(() => {});
+      }
+    }
+  }, []);
 
   const bgStyle = useAnimatedStyle(() => ({
     backgroundColor: interpolateColor(
@@ -171,67 +236,91 @@ export default function CheckinScreen() {
     ),
   }));
 
-  // ── Recording ─────────────────────────────────────────────────────────────
   const startRecording = useCallback(async () => {
-    if (Platform.OS === 'web') {
-      Alert.alert('Voice needs Expo Go', 'Open this app on your phone with Expo Go to use voice logging.');
-      return;
+    if (voiceState === 'recording') return;
+    
+    try {
+      if (Platform.OS === 'web') {
+        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+          Alert.alert('Not supported', 'Live speech recognition is not supported in this browser.');
+          return;
+        }
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        
+        let finalTranscript = '';
+        recognition.onresult = (event: any) => {
+          let interimTranscript = '';
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+              finalTranscript += event.results[i][0].transcript;
+            } else {
+              interimTranscript += event.results[i][0].transcript;
+            }
+          }
+          setText(finalTranscript + interimTranscript);
+        };
+        recognition.onerror = (e: any) => {
+          if (e.error === 'network') {
+            setTxError('Network blocked. (Brave browser blocks live transcription. Try Chrome or build the APK!)');
+          } else {
+            setTxError(e.error);
+          }
+        };
+        recognition.start();
+        recordingRef.current = recognition;
+      } else {
+        await Voice.start('en-US');
+        recordingRef.current = true; // Just mark as active
+      }
+
+      setVoiceState('recording');
+      setTxError('');
+      setElapsed(0);
+      greenAnim.value = withTiming(1, { duration: 500 });
+      timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
+      try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy); } catch {}
+    } catch (e) {
+      console.log('Failed to start recording', e);
+      recordingRef.current = null;
     }
-    if (!AudioModule) return;
-    const { granted } = await AudioModule.Audio.requestPermissionsAsync();
-    if (!granted) { Alert.alert('Mic needed', 'Allow microphone in Settings to use voice.'); return; }
-
-    await AudioModule.Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-    const rec = new AudioModule.Audio.Recording();
-    await rec.prepareToRecordAsync(AudioModule.Audio.RecordingOptionsPresets.HIGH_QUALITY);
-    await rec.startAsync();
-    recordingRef.current = rec;
-
-    setVoiceState('recording');
-    setTxError('');
-    setElapsed(0);
-    greenAnim.value = withTiming(1, { duration: 500 });
-    micScale.value  = withSequence(
-      withSpring(1.18, { damping: 6, stiffness: 220 }),
-      withSpring(1,    { damping: 9, stiffness: 200 })
-    );
-    timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
-    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy); } catch {}
-  }, []);
+  }, [greenAnim, micScale]);
 
   const stopRecording = useCallback(async () => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-    const rec = recordingRef.current;
-    if (!rec) return;
     try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
 
     setVoiceState('processing');
     greenAnim.value = withTiming(0, { duration: 420 });
 
     try {
-      await rec.stopAndUnloadAsync();
-      recordingRef.current = null;
-      const uri = rec.getURI();
-      if (!uri) throw new Error('No URI');
+      if (Platform.OS === 'web') {
+        if (recordingRef.current) {
+          recordingRef.current.stop();
+          recordingRef.current = null;
+        }
+      } else {
+        await Voice.stop();
+        recordingRef.current = null;
+      }
 
-      const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
-      const domain  = process.env.EXPO_PUBLIC_DOMAIN;
-      const apiBase = domain ? `https://${domain}` : 'http://localhost:8080';
-
-      const resp = await fetch(`${apiBase}/api/transcribe`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ audio: base64, mimeType: 'audio/m4a' }),
-      });
-      const data = await resp.json() as { transcript?: string; error?: string };
-      setText(data.transcript ?? '');
       setVoiceState('transcribed');
-      if (data.transcript) { try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {} }
+      // The text is already populated via live streaming callbacks
+      if (text) { try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {} }
     } catch {
-      setTxError('Could not transcribe — type your note below.');
+      setTxError('Could not stop recording');
       setVoiceState('transcribed');
     }
-  }, []);
+  }, [greenAnim, text]);
+
+  // Auto-start recording if triggered from Speed Dial
+  useEffect(() => {
+    if (autoStart === 'true' && voiceState === 'idle') {
+      startRecording();
+    }
+  }, [autoStart, startRecording]);
 
   // ── Save ──────────────────────────────────────────────────────────────────
   const handleSave = async () => {
@@ -246,7 +335,30 @@ export default function CheckinScreen() {
     );
     setSaving(true);
     try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
-    await addEntry({ text: text.trim(), tags: selectedTags, focus, energy, intervalMinutes: settings.interval });
+    
+    let finalImageUrl = imageUrl;
+    if (imageUrl && !imageUrl.startsWith('http')) {
+      const uploadedUrl = await uploadImageToAppwrite(imageUrl);
+      if (uploadedUrl) {
+        finalImageUrl = uploadedUrl;
+      } else {
+        Alert.alert('Upload Failed', 'Could not upload your photo to Appwrite. Saving without it.');
+        finalImageUrl = undefined;
+      }
+    }
+
+    await addEntry({ 
+      text: text.trim(), 
+      tags: selectedTags, 
+      focus, 
+      energy,
+      leverage,
+      intervalMinutes: customDuration || settings.interval,
+      taskId,
+      taskTitle,
+      imageUrl: finalImageUrl,
+    });
+    await clearCheckinDraft();
     router.back();
   };
 
@@ -262,6 +374,49 @@ export default function CheckinScreen() {
     Keyboard.dismiss();
   };
 
+  const handleAttachPhoto = () => {
+    if (Platform.OS === 'web') {
+      pickImage(false);
+      return;
+    }
+    Alert.alert('Attach Photo', 'Choose an option', [
+      { text: 'Take Photo', onPress: () => pickImage(true) },
+      { text: 'Choose from Gallery', onPress: () => pickImage(false) },
+      { text: 'Cancel', style: 'cancel' }
+    ]);
+  };
+
+  const pickImage = async (useCamera: boolean) => {
+    try {
+      if (useCamera) {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Permission needed', 'Allow camera access to take a photo.');
+          return;
+        }
+      }
+      
+      let result = useCamera 
+        ? await ImagePicker.launchCameraAsync({
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            quality: 0.8,
+          })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            quality: 0.8,
+          });
+
+      if (!result.canceled) {
+        setImageUrl(result.assets[0].uri);
+        try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
+      }
+    } catch (err) {
+      console.log(err);
+    }
+  };
+
   const isRecording  = voiceState === 'recording';
   const isProcessing = voiceState === 'processing';
 
@@ -273,26 +428,68 @@ export default function CheckinScreen() {
   const saveBtnStyle = useAnimatedStyle(() => ({ transform: [{ scale: saveScale.value }] }));
   const micBtnStyle  = useAnimatedStyle(() => ({ transform: [{ scale: micScale.value  }] }));
 
+  // Personality Additions
+  const hour = now.getHours();
+  let greeting = 'Good morning';
+  if (hour >= 12 && hour < 17) greeting = 'Good afternoon';
+  else if (hour >= 17) greeting = 'Good evening';
+  const primaryTag = selectedTags.length > 0 ? tags.find(t => t.id === selectedTags[0]) : null;
+
+  let activityHeader = 'Where are you spending your time?';
+  const lastEntry = entries[0];
+  if (lastEntry) {
+    const diffMs = now.getTime() - new Date(lastEntry.createdAt).getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 60 && diffMins > 0) {
+      activityHeader = `What did you do for the last ${diffMins}m?`;
+    } else if (diffMins >= 60 && diffMins < 24 * 60) {
+      const hours = Math.floor(diffMins / 60);
+      const mins = diffMins % 60;
+      const timeStr = mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+      activityHeader = `What did you do for the last ${timeStr}?`;
+    }
+  }
+
   // ── Shared bottom form ─────────────────────────────────────────────────────
   const bottomForm = (
     <>
+      {/* Personalized Greeting */}
+      <View style={{ paddingHorizontal: 4, marginBottom: 16, marginTop: 4 }}>
+        <Text style={{ fontSize: 24, fontFamily: 'Inter_400Regular', color: isRecording ? '#ffffff' : colors.foreground, letterSpacing: -0.5 }}>
+          {greeting}, Aman.
+        </Text>
+        <Text style={{ fontSize: 15, fontFamily: 'Inter_400Regular', color: isRecording ? '#ffffffaa' : colors.mutedForeground, marginTop: 2 }}>
+          {lastEntry ? 'Ready to log your next session?' : "Let's log your first session."}
+        </Text>
+      </View>
+
       {/* Tags */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionLabel, { color: isRecording ? '#ffffff99' : colors.mutedForeground }]}>
-            ACTIVITY
-          </Text>
-          {selectedTags.length === 0 && (
-            <Text style={[styles.requiredBadge, { color: isRecording ? '#ffaaaa' : '#D97706' }]}>
-              pick one
+      <View style={styles.formCard}>
+        <View style={styles.formCardHeader}>
+          <View style={styles.formCardTitleRow}>
+            <Feather name="tag" size={13} color={isRecording ? '#fff' : colors.primary} />
+            <Text style={[styles.formCardTitle, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>
+              {activityHeader}
             </Text>
+          </View>
+          {selectedTags.length === 0 && (
+            <View style={styles.requiredPill}>
+              <Text style={styles.requiredText}>required</Text>
+            </View>
+          )}
+          {selectedTags.length > 0 && (
+            <View style={[styles.donePill, { backgroundColor: colors.primary + '22' }]}>
+              <Feather name="check" size={10} color={colors.primary} />
+              <Text style={[styles.doneText, { color: colors.primary }]}>{selectedTags.length} selected</Text>
+            </View>
           )}
         </View>
         <View style={styles.tagGrid}>
-          {TAGS.map(tag => (
+          {tags.map(tag => (
             <TagChip
               key={tag.id}
               tagId={tag.id}
+              tag={tag}
               selected={selectedTags.includes(tag.id)}
               onPress={() => toggleTag(tag.id)}
               size="md"
@@ -301,15 +498,200 @@ export default function CheckinScreen() {
         </View>
       </View>
 
+      {tasks.length > 0 && (
+        <>
+          <View style={{ height: 1, backgroundColor: isRecording ? '#ffffff15' : colors.border, marginVertical: 4 }} />
+          {/* AtlasOS Task Linker */}
+          <View style={styles.formCard}>
+          <TouchableOpacity
+            style={styles.taskDropdownToggle}
+            onPress={() => setShowTaskList(!showTaskList)}
+            activeOpacity={0.7}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+              <Feather
+                name={taskId ? 'link-2' : 'link'}
+                size={16}
+                color={taskId ? (isRecording ? '#fff' : colors.primary) : (isRecording ? '#ffffffcc' : colors.mutedForeground)}
+              />
+              <Text
+                style={[styles.taskDropdownText, { color: taskId ? (isRecording ? '#fff' : colors.primary) : (isRecording ? '#ffffffcc' : colors.foreground) }]}
+                numberOfLines={1}
+              >
+                {taskId ? taskTitle : 'Link an AtlasOS Task...'}
+              </Text>
+            </View>
+            <Feather
+              name={showTaskList ? 'chevron-up' : 'chevron-down'}
+              size={16}
+              color={isRecording ? '#ffffffcc' : colors.mutedForeground}
+            />
+          </TouchableOpacity>
+
+          {showTaskList && (
+            <View style={[styles.taskListContainer, { borderTopColor: isRecording ? '#ffffff33' : colors.border }]}>
+              {taskId && (
+                <TouchableOpacity
+                  style={[styles.taskListItem, { backgroundColor: isRecording ? '#ffffff11' : colors.card, borderColor: isRecording ? '#ffffff22' : colors.border, borderWidth: 1 }]}
+                  onPress={() => {
+                    setTaskId(undefined);
+                    setTaskTitle(undefined);
+                    setShowTaskList(false);
+                  }}
+                >
+                  <Feather name="x" size={14} color={isRecording ? '#ff8888' : colors.destructive} />
+                  <Text style={[styles.taskListText, { color: isRecording ? '#ff8888' : colors.destructive }]}>
+                    Clear selection
+                  </Text>
+                </TouchableOpacity>
+              )}
+              {tasks.map(task => {
+                const isSelected = taskId === task.id;
+                const isDone = task.status === 'done';
+                return (
+                  <TouchableOpacity
+                    key={task.id}
+                    style={[
+                      styles.taskListItem,
+                      {
+                        backgroundColor: isSelected ? (isRecording ? '#ffffff22' : colors.primary + '15') : (isRecording ? '#ffffff11' : colors.card),
+                        borderColor: isSelected ? (isRecording ? '#ffffff55' : colors.primary + '55') : (isRecording ? '#ffffff22' : colors.border),
+                        borderWidth: 1,
+                      }
+                    ]}
+                    onPress={() => {
+                      setTaskId(task.id);
+                      setTaskTitle(task.title);
+                      setShowTaskList(false);
+                    }}
+                  >
+                    <Feather
+                      name={isSelected ? 'check-circle' : (isDone ? 'check' : 'circle')}
+                      size={14}
+                      color={isSelected || isDone ? (isRecording ? '#fff' : colors.primary) : (isRecording ? '#ffffff66' : colors.mutedForeground)}
+                    />
+                    <Text
+                      style={[styles.taskListText, { color: isSelected ? (isRecording ? '#fff' : colors.primary) : (isRecording ? '#ffffffcc' : colors.foreground) }]}
+                      numberOfLines={1}
+                    >
+                      {task.title}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+        </View>
+        </>
+      )}
+
+      <View style={{ height: 1, backgroundColor: isRecording ? '#ffffff15' : colors.border, marginVertical: 4 }} />
+
       {/* Focus + energy */}
-      <View style={styles.section}>
+      <View style={styles.formCard}>
+        <View style={styles.formCardHeader}>
+          <View style={styles.formCardTitleRow}>
+            <Feather name="bar-chart-2" size={13} color={isRecording ? '#fff' : colors.primary} />
+            <Text style={[styles.formCardTitle, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>
+              How did it feel?
+            </Text>
+          </View>
+        </View>
         <FocusEnergyPicker
           focus={focus}
           energy={energy}
           onFocusChange={setFocus}
           onEnergyChange={setEnergy}
+          isRecording={isRecording}
         />
       </View>
+
+      <View style={{ height: 1, backgroundColor: isRecording ? '#ffffff15' : colors.border, marginVertical: 4 }} />
+
+      {/* Leverage */}
+      <View style={styles.formCard}>
+        <View style={styles.formCardHeader}>
+          <View style={styles.formCardTitleRow}>
+            <Feather name="trending-up" size={13} color={isRecording ? '#fff' : colors.primary} />
+            <Text style={[styles.formCardTitle, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>
+              Were you doing high-leverage work or busywork?
+            </Text>
+          </View>
+        </View>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <Pressable
+            style={[
+              { flex: 1, paddingVertical: 8, paddingHorizontal: 6, borderRadius: 100, borderWidth: leverage === 'high' ? 0 : 1.5, alignItems: 'center', justifyContent: 'center', paddingVertical: leverage === 'high' ? 9.5 : 8 },
+              leverage === 'high' 
+                ? { backgroundColor: '#4F46E5', borderColor: '#4F46E5' } // Indigo
+                : { backgroundColor: isRecording ? '#ffffff11' : colors.card, borderColor: isRecording ? '#ffffff22' : colors.border }
+            ]}
+            onPress={() => {
+              try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+              setLeverage(leverage === 'high' ? undefined : 'high');
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+              <Feather name="zap" size={15} color={leverage === 'high' ? '#fff' : (isRecording ? '#ffffffcc' : colors.mutedForeground)} />
+              <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: leverage === 'high' ? '#fff' : (isRecording ? '#ffffffcc' : colors.foreground) }}>10x Leverage</Text>
+            </View>
+          </Pressable>
+          <Pressable
+             style={[
+              { flex: 1, paddingVertical: 8, paddingHorizontal: 6, borderRadius: 100, borderWidth: leverage === 'busywork' ? 0 : 1.5, alignItems: 'center', justifyContent: 'center', paddingVertical: leverage === 'busywork' ? 9.5 : 8 },
+              leverage === 'busywork' 
+                ? { backgroundColor: '#F59E0B', borderColor: '#F59E0B' } // Amber
+                : { backgroundColor: isRecording ? '#ffffff11' : colors.card, borderColor: isRecording ? '#ffffff22' : colors.border }
+            ]}
+            onPress={() => {
+              try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+              setLeverage(leverage === 'busywork' ? undefined : 'busywork');
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+              <Feather name="clock" size={15} color={leverage === 'busywork' ? '#fff' : (isRecording ? '#ffffffcc' : colors.mutedForeground)} />
+              <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: leverage === 'busywork' ? '#fff' : (isRecording ? '#ffffffcc' : colors.foreground) }}>Busywork</Text>
+            </View>
+          </Pressable>
+        </View>
+      </View>
+
+      <View style={{ height: 1, backgroundColor: isRecording ? '#ffffff15' : colors.border, marginVertical: 4 }} />
+
+      {/* Override Duration */}
+      <View style={styles.formCard}>
+        <View style={styles.formCardHeader}>
+          <View style={styles.formCardTitleRow}>
+            <Feather name="clock" size={13} color={isRecording ? '#fff' : colors.primary} />
+            <Text style={[styles.formCardTitle, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>
+              Are you logging a past session?
+            </Text>
+          </View>
+        </View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+          {[15, 30, 45, 60, 90, 120, 180].map(dur => (
+            <Pressable
+              key={dur}
+              style={[
+                { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 100, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+                customDuration === dur 
+                  ? { backgroundColor: colors.primary, borderColor: colors.primary }
+                  : { backgroundColor: isRecording ? '#ffffff11' : colors.card, borderColor: isRecording ? '#ffffff22' : colors.border }
+              ]}
+              onPress={() => {
+                try { Haptics.selectionAsync(); } catch {}
+                setCustomDuration(customDuration === dur ? undefined : dur);
+              }}
+            >
+              <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: customDuration === dur ? '#fff' : (isRecording ? '#ffffffcc' : colors.foreground) }}>
+                {dur >= 60 ? (dur % 60 === 0 ? `${dur / 60}h` : `${Math.floor(dur / 60)}h ${dur % 60}m`) : `${dur}m`}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      </View>
+
+
     </>
   );
 
@@ -321,16 +703,28 @@ export default function CheckinScreen() {
 
       {/* Top bar */}
       <View style={styles.topBar}>
-        <ModeTabs mode={mode} onSwitch={switchMode} disabled={isRecording} isRecording={isRecording} />
+        {step === 1 ? (
+          <ModeTabs mode={mode} onSwitch={switchMode} disabled={isRecording} isRecording={isRecording} />
+        ) : (
+          <TouchableOpacity 
+            onPress={() => setStep(1)} 
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6, paddingHorizontal: 12, backgroundColor: colors.card, borderRadius: 100, borderWidth: 1, borderColor: colors.border }}
+          >
+            <Feather name="arrow-left" size={14} color={colors.foreground} />
+            <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: colors.foreground }}>Back</Text>
+          </TouchableOpacity>
+        )}
         <View style={styles.topRight}>
           <Text style={[styles.clock, { color: isRecording ? '#ffffffaa' : colors.mutedForeground }]}>
             {timeStr}
           </Text>
           <Pressable
-            onPress={() => { if (isRecording) stopRecording(); router.back(); }}
+            onPress={() => { if (isRecording) stopRecording(); clearCheckinDraft(); router.back(); }}
             hitSlop={14}
           >
-            <Feather name="x" size={20} color={isRecording ? '#ffffffcc' : colors.mutedForeground} />
+            <View style={[styles.closeBtn, { backgroundColor: isRecording ? '#ffffff22' : colors.muted }]}>
+              <Feather name="x" size={14} color={isRecording ? '#ffffffcc' : colors.mutedForeground} />
+            </View>
           </Pressable>
         </View>
       </View>
@@ -338,21 +732,33 @@ export default function CheckinScreen() {
       {/* Scrollable content */}
       <ScrollView
         style={{ flex: 1 }}
-        contentContainerStyle={[styles.scroll]}
+        contentContainerStyle={[styles.scroll, step === 1 && { flexGrow: 1 }]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
         {/* ── TEXT MODE ──────────────────────────────────────────── */}
-        {mode === 'text' && (
-          <>
-            <Text style={[styles.prompt, { color: colors.foreground }]}>{PROMPT}</Text>
+        {step === 1 && mode === 'text' && (
+          <View style={{ flex: 1, paddingHorizontal: 4, paddingTop: 16 }}>
+            <Text style={[styles.prompt, { color: colors.foreground, fontSize: 28, lineHeight: 34, letterSpacing: -0.5, marginBottom: 16 }]}>{PROMPT}</Text>
+            
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
+              <TouchableOpacity 
+                onPress={handleAttachPhoto} 
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.primary + '15', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 100 }}
+              >
+                <Feather name="camera" size={14} color={colors.primary} />
+                <Text style={{ color: colors.primary, fontSize: 13, fontFamily: 'Inter_600SemiBold' }}>{imageUrl ? 'Change Photo' : 'Attach Photo'}</Text>
+              </TouchableOpacity>
+            </View>
 
-            <Pressable onPress={() => inputRef.current?.focus()} style={styles.inputArea}>
+            <View style={{ height: 1, backgroundColor: colors.border, marginBottom: 20, width: '100%' }} />
+            
+            <Pressable style={{ flex: 1 }} onPress={() => inputRef.current?.focus()}>
               <TextInput
                 ref={inputRef}
-                style={[styles.input, { color: colors.foreground }]}
-                placeholder="What were you doing?"
-                placeholderTextColor={colors.mutedForeground + '88'}
+                style={[styles.input, { color: colors.foreground, fontSize: 18, lineHeight: 28, flex: 1, minHeight: 200 }]}
+                placeholder="Start typing..."
+                placeholderTextColor={colors.mutedForeground + '66'}
                 multiline
                 value={text}
                 onChangeText={setText}
@@ -361,96 +767,116 @@ export default function CheckinScreen() {
                 selectionColor={colors.primary}
                 underlineColorAndroid="transparent"
               />
-              {/* Subtle bottom rule instead of a box */}
-              <View style={[styles.inputRule, { backgroundColor: colors.border }]} />
             </Pressable>
-
-            {bottomForm}
-          </>
-        )}
-
-        {/* ── VOICE MODE ─────────────────────────────────────────── */}
-        {mode === 'voice' && (
-          <>
-            {/* Mic area */}
-            <View style={styles.micArea}>
-              {/* Pulse rings */}
-              <View style={styles.rings} pointerEvents="none">
-                <PulseRing delay={0}    active={isRecording} />
-                <PulseRing delay={540}  active={isRecording} />
-                <PulseRing delay={1080} active={isRecording} />
-              </View>
-
-              {/* Mic button */}
-              <Animated.View style={micBtnStyle}>
-                <Pressable
-                  style={[
-                    styles.micBtn,
-                    isRecording
-                      ? { backgroundColor: '#ffffff22', borderWidth: 2, borderColor: '#ffffffcc' }
-                      : { backgroundColor: colors.primary },
-                  ]}
-                  onPress={isRecording ? stopRecording : startRecording}
-                  disabled={isProcessing}
+            
+            {imageUrl && (
+              <View style={{ marginBottom: 20, position: 'relative', marginTop: 12 }}>
+                <Image source={{ uri: imageUrl }} style={{ width: '100%', height: 260, borderRadius: 16 }} resizeMode="cover" />
+                <TouchableOpacity 
+                  onPress={() => setImageUrl(undefined)}
+                  style={{ position: 'absolute', top: 12, right: 12, backgroundColor: 'rgba(0,0,0,0.6)', padding: 8, borderRadius: 100 }}
                 >
-                  <Feather
-                    name={isProcessing ? 'loader' : isRecording ? 'square' : 'mic'}
-                    size={40}
-                    color="#fff"
-                  />
-                </Pressable>
-              </Animated.View>
-
-              {/* Status text */}
-              <Text style={[styles.micStatus, { color: isRecording ? '#ffffffee' : colors.mutedForeground }]}>
-                {isRecording
-                  ? `${mm}:${ss}`
-                  : isProcessing
-                  ? 'Transcribing…'
-                  : voiceState === 'transcribed'
-                  ? 'Tap to re-record'
-                  : Platform.OS === 'web'
-                  ? 'Use Expo Go on your phone'
-                  : 'Tap to speak'}
-              </Text>
-
-              {isRecording && (
-                <Text style={styles.tapStop}>tap square to stop</Text>
-              )}
-            </View>
-
-            {/* Transcript box */}
-            {voiceState === 'transcribed' && (
-              <View style={styles.transcriptWrap}>
-                {txError ? (
-                  <Text style={[styles.txError, { color: colors.destructive }]}>{txError}</Text>
-                ) : (
-                  <Text style={[styles.txHint, { color: colors.mutedForeground }]}>
-                    ✦ Edit if needed
-                  </Text>
-                )}
-                <Pressable onPress={() => inputRef.current?.focus()} style={[styles.inputArea, { marginTop: 6 }]}>
-                  <TextInput
-                    ref={inputRef}
-                    style={[styles.input, { color: colors.foreground }]}
-                    placeholder="Your words will appear here…"
-                    placeholderTextColor={colors.mutedForeground + '88'}
-                    multiline
-                    value={text}
-                    onChangeText={setText}
-                    textAlignVertical="top"
-                    selectionColor={colors.primary}
-                  />
-                </Pressable>
+                  <Feather name="x" size={16} color="#fff" />
+                </TouchableOpacity>
               </View>
             )}
 
-            {bottomForm}
-          </>
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'flex-end', marginTop: 12 }}>
+              {text.length > 0 && (
+                <Text style={[styles.charCount, { color: colors.mutedForeground, fontSize: 13, marginBottom: 4 }]}>
+                  {text.length} chars
+                </Text>
+              )}
+            </View>
+          </View>
         )}
 
-        {/* Bottom spacer so content doesn't hide behind sticky btn */}
-        <View style={{ height: 90 }} />
+        {/* ── VOICE MODE ─────────────────────────────────────────── */}
+        {step === 1 && mode === 'voice' && (
+          <View style={{ flex: 1, paddingHorizontal: 4, paddingTop: 16 }}>
+            
+            {/* Massive Cinematic Transcript Box */}
+            <Pressable style={{ flex: 1 }} onPress={() => inputRef.current?.focus()}>
+              <TextInput
+                ref={inputRef}
+                style={[
+                  styles.input, 
+                  { 
+                    color: isRecording ? '#ffffff' : colors.foreground, 
+                    flex: 1, 
+                    minHeight: 200,
+                    fontSize: 32, 
+                    lineHeight: 40, 
+                    fontFamily: 'Inter_300Light' 
+                  }
+                ]}
+                placeholder={isRecording ? "I'm listening..." : isProcessing ? "Transcribing..." : "Tap the mic to start..."}
+                placeholderTextColor={isRecording ? '#ffffff88' : (colors.mutedForeground + '66')}
+                multiline
+                value={text}
+                onChangeText={setText}
+                textAlignVertical="top"
+                selectionColor={isRecording ? '#ffffff' : colors.primary}
+                editable={!isRecording && !isProcessing}
+              />
+            </Pressable>
+
+            {txError ? (
+              <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: '#EF4444', marginBottom: 12 }}>{txError}</Text>
+            ) : null}
+            
+            {imageUrl && (
+              <View style={{ marginBottom: 20, position: 'relative', marginTop: 12 }}>
+                <Image source={{ uri: imageUrl }} style={{ width: '100%', height: 260, borderRadius: 16 }} resizeMode="cover" />
+                <TouchableOpacity 
+                  onPress={() => setImageUrl(undefined)}
+                  style={{ position: 'absolute', top: 12, right: 12, backgroundColor: 'rgba(0,0,0,0.6)', padding: 8, borderRadius: 100 }}
+                >
+                  <Feather name="x" size={16} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Bottom Controls */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, paddingBottom: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: isRecording ? '#ffffff22' : colors.border }}>
+              {/* Attach Photo (Left) */}
+              <TouchableOpacity 
+                onPress={handleAttachPhoto} 
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: isRecording ? '#ffffff15' : colors.primary + '15', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 100 }}
+              >
+                <Feather name="camera" size={16} color={isRecording ? '#ffffff' : colors.primary} />
+                <Text style={{ color: isRecording ? '#ffffff' : colors.primary, fontSize: 14, fontFamily: 'Inter_600SemiBold' }}>{imageUrl ? 'Change Photo' : 'Attach Photo'}</Text>
+              </TouchableOpacity>
+
+              {/* Mic Button Pill (Right) */}
+              <Pressable
+                style={[
+                  { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 100 },
+                  isRecording
+                    ? { backgroundColor: '#ffffff', shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 10, elevation: 5 }
+                    : { backgroundColor: colors.primary },
+                ]}
+                onPress={isRecording ? stopRecording : startRecording}
+                disabled={isProcessing}
+              >
+                <Feather
+                  name={isProcessing ? 'loader' : isRecording ? 'square' : 'mic'}
+                  size={16}
+                  color={isRecording ? '#1B4332' : '#ffffff'}
+                />
+                <Text style={{ fontSize: 14, fontFamily: 'Inter_600SemiBold', color: isRecording ? '#1B4332' : '#ffffff' }}>
+                  {isProcessing ? 'Transcribing...' : isRecording ? `${mm}:${ss}` : 'Start Speaking'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
+        {/* ── STEP 2 FORM ────────────────────────────────────────── */}
+        {step === 2 && bottomForm}
+
+        {/* Bottom spacer */}
+        <View style={{ height: 110 }} />
       </ScrollView>
 
       {/* ── Sticky save button ──────────────────────────────────── */}
@@ -460,37 +886,61 @@ export default function CheckinScreen() {
           { paddingBottom: Math.max(insets.bottom, 20), backgroundColor: isRecording ? '#1B4332' : colors.background },
         ]}
       >
-        <Animated.View style={[{ flex: 1 }, saveBtnStyle]}>
-          <Pressable
-            style={[
-              styles.saveBtn,
-              {
-                backgroundColor:
-                  selectedTags.length > 0
-                    ? isRecording ? '#fff' : colors.primary
-                    : colors.muted,
-              },
-            ]}
-            onPress={handleSave}
-            disabled={saving || isRecording || isProcessing}
-          >
-            <Text
+        <Animated.View style={[{ width: '100%' }, saveBtnStyle]}>
+          {step === 1 ? (
+            <Pressable
               style={[
-                styles.saveBtnText,
+                styles.saveBtn,
                 {
-                  color:
-                    selectedTags.length > 0
-                      ? isRecording ? colors.primary : '#fff'
-                      : colors.mutedForeground,
+                  backgroundColor: isRecording ? '#ffffff22' : colors.primary,
                 },
               ]}
+              onPress={() => {
+                try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+                setStep(2);
+              }}
+              disabled={isRecording || isProcessing}
             >
-              {saving ? 'Saving…' : 'Save Entry'}
-            </Text>
-            {selectedTags.length > 0 && !saving && (
-              <Feather name="arrow-right" size={18} color={isRecording ? colors.primary : '#fff'} />
-            )}
-          </Pressable>
+              <Text style={[styles.saveBtnText, { color: isRecording ? '#ffffffcc' : '#fff' }]}>Next Step</Text>
+              <Feather name="arrow-right" size={18} color={isRecording ? '#ffffffcc' : '#fff'} />
+            </Pressable>
+          ) : (
+            <Pressable
+              style={[
+                styles.saveBtn,
+                {
+                  backgroundColor:
+                    selectedTags.length > 0
+                      ? isRecording ? '#fff' : colors.primary
+                      : colors.muted,
+                },
+              ]}
+              onPress={handleSave}
+              disabled={saving || isRecording || isProcessing}
+            >
+              {saving ? (
+                <Feather name="loader" size={18} color={selectedTags.length > 0 ? (isRecording ? colors.primary : '#fff') : colors.mutedForeground} />
+              ) : (
+                <Feather name="check" size={18} color={selectedTags.length > 0 ? (isRecording ? colors.primary : '#fff') : colors.mutedForeground} />
+              )}
+              <Text
+                style={[
+                  styles.saveBtnText,
+                  {
+                    color:
+                      selectedTags.length > 0
+                        ? isRecording ? colors.primary : '#fff'
+                        : colors.mutedForeground,
+                  },
+                ]}
+              >
+                {saving ? 'Saving…' : (primaryTag ? `Log ${primaryTag.label}` : 'Save Entry')}
+              </Text>
+              {selectedTags.length > 0 && !saving && (
+                <Feather name="arrow-right" size={18} color={isRecording ? colors.primary : '#fff'} />
+              )}
+            </Pressable>
+          )}
         </Animated.View>
       </View>
     </Animated.View>
@@ -502,7 +952,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden' },
   handle: {
     width: 36, height: 4, borderRadius: 2,
-    alignSelf: 'center', marginTop: 10, marginBottom: 0,
+    alignSelf: 'center', marginTop: 10,
   },
   topBar: {
     flexDirection: 'row',
@@ -534,36 +984,141 @@ const styles = StyleSheet.create({
     zIndex: 1,
   },
   tabLabel: { fontSize: 13 },
-  topRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  topRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   clock: { fontSize: 12, fontFamily: 'Inter_500Medium' },
-  scroll: { paddingHorizontal: 22, paddingTop: 4, gap: 22 },
-  prompt: { fontSize: 22, fontFamily: 'Inter_700Bold', lineHeight: 30, letterSpacing: -0.3 },
-  inputArea: { minHeight: 110, justifyContent: 'flex-start' },
+  closeBtn: {
+    width: 30, height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scroll: { paddingHorizontal: 18, paddingTop: 6, gap: 14 },
+
+  // ── Form cards ──
+  formCard: {
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+    padding: 16,
+    gap: 12,
+  },
+  inputCard: {
+    gap: 0,
+    borderWidth: 1.5,
+  },
+  formCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  formCardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  formCardTitle: {
+    fontSize: 14,
+    fontFamily: 'Inter_700Bold',
+    letterSpacing: -0.2,
+  },
+  requiredPill: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 100,
+  },
+  requiredText: {
+    fontSize: 10,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#D97706',
+    letterSpacing: 0.3,
+  },
+  donePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 100,
+  },
+  doneText: {
+    fontSize: 10,
+    fontFamily: 'Inter_600SemiBold',
+    letterSpacing: 0.3,
+  },
+  tagGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+
+  // ── Input ──
+  prompt: {
+    fontSize: 18,
+    fontFamily: 'Inter_700Bold',
+    lineHeight: 26,
+    letterSpacing: -0.3,
+    paddingTop: 2,
+  },
+  inputDivider: { height: 1, borderRadius: 1, marginVertical: 12 },
   input: {
-    fontSize: 17,
+    fontSize: 16,
     fontFamily: 'Inter_400Regular',
     lineHeight: 26,
-    minHeight: 90,
-    // Remove web default border
+    minHeight: 80,
     ...Platform.select({ web: { outlineStyle: 'none' } as object }),
   },
-  inputRule: { height: 1.5, borderRadius: 1, marginTop: 6 },
-  section: { gap: 10 },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  sectionLabel: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 1.2 },
-  requiredBadge: { fontSize: 11, fontFamily: 'Inter_500Medium' },
-  tagGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
-  // Voice
+  charCount: {
+    fontSize: 11,
+    fontFamily: 'Inter_400Regular',
+    textAlign: 'right',
+    marginTop: 6,
+    opacity: 0.6,
+  },
+
+  taskDropdownToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  taskDropdownText: {
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+  },
+  taskListContainer: {
+    marginTop: 12,
+    gap: 2,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#0000001a',
+    paddingTop: 12,
+  },
+  taskListItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  taskListText: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    flex: 1,
+  },
+  taskStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+
+  // ── Voice ──
   micArea: {
     alignItems: 'center',
-    paddingTop: 28,
-    paddingBottom: 8,
-    gap: 16,
+    paddingTop: 32,
+    paddingBottom: 16,
+    gap: 20,
     position: 'relative',
   },
   rings: {
     position: 'absolute',
-    top: 28,
+    top: 32,
     width: 110, height: 110,
     alignItems: 'center', justifyContent: 'center',
   },
@@ -579,14 +1134,18 @@ const styles = StyleSheet.create({
     borderRadius: 50,
     alignItems: 'center', justifyContent: 'center',
   },
-  micStatus: { fontSize: 15, fontFamily: 'Inter_600SemiBold', letterSpacing: 0.2, marginTop: 4 },
-  tapStop: { fontSize: 11, color: '#ffffff77', fontFamily: 'Inter_400Regular', letterSpacing: 0.5 },
-  transcriptWrap: { gap: 0 },
-  txHint:  { fontSize: 12, fontFamily: 'Inter_500Medium' },
-  txError: { fontSize: 12, fontFamily: 'Inter_500Medium' },
-  // Save bar
+  micStatusWrap: { alignItems: 'center', gap: 4 },
+  micStatus: { fontSize: 20, fontFamily: 'Inter_700Bold', letterSpacing: -0.5 },
+  micSubtext: { fontSize: 12, fontFamily: 'Inter_400Regular', letterSpacing: 0.2, textAlign: 'center' },
+  tapStop: { fontSize: 11, color: '#ffffff77', fontFamily: 'Inter_400Regular' },
+  txHintRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  txErrorRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  txHint:  { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+  txError: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: '#EF4444' },
+
+  // ── Save bar ──
   saveBar: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 18,
     paddingTop: 12,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#00000011',
@@ -595,8 +1154,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 17,
-    borderRadius: 100,
+    paddingVertical: 16,
+    borderRadius: 18,
     gap: 8,
   },
   saveBtnText: { fontSize: 16, fontFamily: 'Inter_700Bold', letterSpacing: 0.1 },

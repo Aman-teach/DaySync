@@ -12,25 +12,31 @@ import { formatTime } from '@/utils/helpers';
 import { TagChip } from './TagChip';
 import { useApp } from '@/context/AppContext';
 import { useRouter } from 'expo-router';
+import { Feather } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import { Image } from 'react-native';
 
 const FOCUS_COLORS = {
-  deep: '#2D6A4F',
-  light: '#E8A838',
-  off: '#9CA3AF',
+  deep: '#2563EB',
+  light: '#06B6D4',
+  neutral: '#9CA3AF',
+  off: '#64748B',
 };
 
 const ENERGY_ICONS = { high: 'H', low: 'L' };
 
 interface Props {
   entry: Entry;
+  compact?: boolean;
 }
 
-export function EntryCard({ entry }: Props) {
+export function EntryCard({ entry, compact }: Props) {
   const colors = useColors();
   const { removeEntry } = useApp();
   const router = useRouter();
 
   const handleLongPress = () => {
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
     Alert.alert('Entry', 'What would you like to do?', [
       {
         text: 'Edit',
@@ -50,15 +56,21 @@ export function EntryCard({ entry }: Props) {
     ]);
   };
 
+  const handlePress = () => {
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+    router.push({ pathname: '/edit-entry', params: { id: entry.id } });
+  };
+
+  const dur = entry.intervalMinutes || 30;
+  const durStr = dur >= 60 ? (dur % 60 === 0 ? `${dur / 60}h` : `${Math.floor(dur / 60)}h ${dur % 60}m`) : `${dur}m`;
+
   return (
     <TouchableOpacity
       onLongPress={handleLongPress}
-      onPress={() =>
-        router.push({ pathname: '/edit-entry', params: { id: entry.id } })
-      }
+      onPress={handlePress}
       activeOpacity={0.8}
     >
-      <View style={[styles.row]}>
+      <View style={[styles.row, compact && { paddingRight: 0 }]}>
         {/* Left rail */}
         <View style={styles.rail}>
           <View
@@ -75,54 +87,99 @@ export function EntryCard({ entry }: Props) {
           style={[
             styles.card,
             { backgroundColor: colors.card, borderColor: colors.border },
+            compact && { padding: 8, gap: 4 }
           ]}
         >
           <View style={styles.header}>
-            <Text style={[styles.time, { color: colors.mutedForeground }]}>
-              {formatTime(entry.createdAt)}
+            <Text style={[styles.time, { color: colors.mutedForeground }, compact && { fontSize: 10 }]}>
+              {formatTime(entry.createdAt)} • {durStr}
             </Text>
             <View style={styles.badges}>
               <View
                 style={[
                   styles.focusBadge,
                   { backgroundColor: FOCUS_COLORS[entry.focus] + '22', borderColor: FOCUS_COLORS[entry.focus] + '44' },
+                  compact && { paddingHorizontal: 4, paddingVertical: 1 }
                 ]}
               >
-                <Text style={[styles.focusText, { color: FOCUS_COLORS[entry.focus] }]}>
+                <Text style={[styles.focusText, { color: FOCUS_COLORS[entry.focus] }, compact && { fontSize: 9 }]}>
                   {entry.focus.charAt(0).toUpperCase() + entry.focus.slice(1)}
                 </Text>
               </View>
-              <View
-                style={[
-                  styles.energyBadge,
-                  {
-                    backgroundColor:
-                      entry.energy === 'high' ? '#FFF3DC' : '#F0F0F0',
-                  },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.energyText,
-                    { color: entry.energy === 'high' ? '#C07A00' : '#888' },
-                  ]}
-                >
-                  {entry.energy === 'high' ? 'High' : 'Low'}
-                </Text>
-              </View>
+              {!compact && (
+                <View style={{ flexDirection: 'row', gap: 6 }}>
+                  <View
+                    style={[
+                      styles.energyBadge,
+                      {
+                        backgroundColor:
+                          entry.energy === 'high' ? '#10B98122' : '#8B5CF622',
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.energyText,
+                        { color: entry.energy === 'high' ? '#10B981' : '#8B5CF6' },
+                      ]}
+                    >
+                      {entry.energy === 'high' ? 'High' : 'Low'}
+                    </Text>
+                  </View>
+                  {entry.leverage && (
+                    <View
+                      style={[
+                        styles.energyBadge,
+                        {
+                          backgroundColor:
+                            entry.leverage === 'high' ? '#4F46E522' : '#F59E0B22',
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.energyText,
+                          { color: entry.leverage === 'high' ? '#4F46E5' : '#F59E0B' },
+                        ]}
+                      >
+                        {entry.leverage === 'high' ? '10x Leverage' : 'Busywork'}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
             </View>
           </View>
 
           {entry.text ? (
             <Text
-              style={[styles.text, { color: colors.foreground }]}
-              numberOfLines={3}
+              style={[styles.text, { color: colors.foreground }, compact && { fontSize: 12 }]}
+              numberOfLines={compact ? 2 : 3}
             >
               {entry.text}
             </Text>
           ) : null}
 
-          {entry.tags.length > 0 && (
+          {entry.imageUrl && (
+            <View style={{ marginTop: 8 }}>
+              <Image 
+                source={{ uri: entry.imageUrl }} 
+                style={{ width: '100%', height: compact ? 120 : 180, borderRadius: 10, borderWidth: 1, borderColor: colors.border }} 
+                resizeMode="cover" 
+              />
+            </View>
+          )}
+
+          {entry.taskTitle && (
+            <View style={[styles.linkedTaskBadge, { backgroundColor: colors.primary + '15', borderColor: colors.primary + '33' }]}>
+              <Feather name="link" size={10} color={colors.primary} />
+              <Text style={[styles.linkedTaskText, { color: colors.primary }]} numberOfLines={1}>
+                {entry.taskTitle}
+              </Text>
+            </View>
+          )}
+
+          {(!compact && entry.tags.length > 0) && (
             <View style={styles.tags}>
               {entry.tags.map(t => (
                 <TagChip key={t} tagId={t} />
@@ -162,4 +219,20 @@ const styles = StyleSheet.create({
   energyText: { fontSize: 11, fontFamily: 'Inter_500Medium' },
   text: { fontSize: 14, fontFamily: 'Inter_400Regular', lineHeight: 20 },
   tags: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
+  linkedTaskBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+  },
+  linkedTaskText: {
+    fontSize: 11,
+    fontFamily: 'Inter_600SemiBold',
+    flexShrink: 1,
+  },
 });

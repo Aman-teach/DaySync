@@ -12,11 +12,16 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { useApp } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import { Feather } from '@expo/vector-icons';
 import { exportToCSV } from '@/utils/export';
 import { requestNotificationPermission } from '@/utils/notifications';
 import { formatHour } from '@/utils/helpers';
 import { Settings } from '@/types';
+import { ExportModal } from '@/components/ExportModal';
+import { TagManagerModal } from '@/components/TagManagerModal';
+import { Image } from 'expo-image';
+import { useRouter } from 'expo-router';
 
 const INTERVALS: Array<Settings['interval']> = [15, 30, 60, 90];
 
@@ -59,9 +64,13 @@ function SettingRow({
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
+  const router = useRouter();
   const { settings, updateSettings, entries, generateDayWrap } = useApp();
+  const { logout } = useAuth();
   const [exporting, setExporting] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [showTagManager, setShowTagManager] = useState(false);
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
 
   const handleToggleNotifications = async (val: boolean) => {
@@ -75,18 +84,12 @@ export default function SettingsScreen() {
     await updateSettings({ notificationsEnabled: val });
   };
 
-  const handleExport = async () => {
+  const handleExport = () => {
     if (entries.length === 0) {
       Alert.alert('No data', 'Log some entries first before exporting.');
       return;
     }
-    setExporting(true);
-    try {
-      await exportToCSV(entries);
-    } catch (e) {
-      Alert.alert('Export failed', 'Could not export data. Please try again.');
-    }
-    setExporting(false);
+    setShowExportModal(true);
   };
 
   const handleGenerateWrap = async () => {
@@ -116,17 +119,32 @@ export default function SettingsScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
+      <View style={[styles.navHeader, { paddingTop: topPad, backgroundColor: colors.background }]}>
+        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+          <Feather name="arrow-left" size={24} color={colors.foreground} />
+        </TouchableOpacity>
+        <Text style={[styles.navTitle, { color: colors.foreground }]}>Settings</Text>
+        <View style={{ width: 40 }} />
+      </View>
+
       <ScrollView
         contentContainerStyle={[
           styles.scroll,
           {
-            paddingTop: topPad + 12,
+            paddingTop: 12,
             paddingBottom: Platform.OS === 'web' ? 34 + 84 : insets.bottom + 100,
           },
         ]}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={[styles.pageTitle, { color: colors.foreground }]}>Settings</Text>
+        <View style={styles.pageHeader}>
+          <Image
+            source={require('@/assets/images/logo.png')}
+            style={{ width: 38, height: 38, borderRadius: 10 }}
+            contentFit="contain"
+          />
+          <Text style={[styles.pageTitle, { color: colors.foreground }]}>DaySync</Text>
+        </View>
 
         {/* Reminder interval */}
         <Section title="REMINDER INTERVAL">
@@ -239,6 +257,11 @@ export default function SettingsScreen() {
         {/* Data */}
         <Section title="DATA">
           <SettingRow
+            label="Manage Tags"
+            onPress={() => setShowTagManager(true)}
+            rightEl={<Feather name="tag" size={16} color={colors.mutedForeground} />}
+          />
+          <SettingRow
             label={exporting ? 'Exporting...' : 'Export as CSV'}
             onPress={handleExport}
             rightEl={<Feather name="download" size={16} color={colors.mutedForeground} />}
@@ -254,19 +277,68 @@ export default function SettingsScreen() {
         {/* About */}
         <Section title="ABOUT">
           <SettingRow
-            label="Atlas Cadence"
+            label="DaySync"
             isLast
             rightEl={<Text style={[styles.version, { color: colors.mutedForeground }]}>v1.0.0</Text>}
           />
         </Section>
+
+        {/* Account */}
+        <Section title="ACCOUNT">
+          <SettingRow
+            label="Log out"
+            onPress={async () => {
+              try {
+                await logout();
+              } catch (err: any) {
+                Alert.alert('Error logging out', err.message);
+              }
+            }}
+            isLast
+            rightEl={<Feather name="log-out" size={16} color="#EF4444" />}
+          />
+        </Section>
       </ScrollView>
+
+      <ExportModal
+        visible={showExportModal}
+        entries={entries}
+        onClose={() => setShowExportModal(false)}
+      />
+      <TagManagerModal
+        visible={showTagManager}
+        onClose={() => setShowTagManager(false)}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  scroll: { paddingHorizontal: 20, gap: 16 },
+  scroll: { paddingHorizontal: 20, gap: 32 },
+  
+  navHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    zIndex: 10,
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navTitle: {
+    fontSize: 17,
+    fontFamily: 'Inter_600SemiBold',
+  },
+
+  pageHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: -8 },
   pageTitle: { fontSize: 28, fontFamily: 'Inter_700Bold', letterSpacing: -1 },
   section: { gap: 6 },
   sectionTitle: { fontSize: 11, fontFamily: 'Inter_600SemiBold', letterSpacing: 1 },

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Atlas Cadence",
+    "name": "DaySync",
     "slug": "mobile",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -11,12 +11,14 @@
     "splash": {
       "image": "./assets/images/icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#F5F0E8"
+      "backgroundColor": "#638A57"
     },
     "ios": {
       "supportsTablet": false
     },
-    "android": {},
+    "android": {
+      "package": "com.createbyaman.cadence"
+    },
     "web": {
       "favicon": "./assets/images/icon.png"
     },
@@ -29,11 +31,24 @@
       ],
       "expo-font",
       "expo-web-browser",
-      "expo-notifications"
+      "expo-notifications",
+      [
+        "@react-native-voice/voice",
+        {
+          "microphonePermission": "Allow Cadence to access your microphone to transcribe your logs.",
+          "speechRecognitionPermission": "Allow Cadence to securely recognize your speech."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "434eb059-2c96-44c7-94a9-5df70c5c2e4c"
+      }
+    },
+    "owner": "createbyaman"
   }
 }

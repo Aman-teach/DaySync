@@ -23,14 +23,14 @@ export async function exportToCSV(entries: Entry[]): Promise<void> {
     return;
   }
 
-  const FileSystem = await import('expo-file-system');
+  const FileSystem = await import('expo-file-system/legacy');
   const Sharing = await import('expo-sharing');
   const path = `${FileSystem.documentDirectory}atlas-cadence-export.csv`;
   await FileSystem.writeAsStringAsync(path, csv);
   if (await Sharing.isAvailableAsync()) {
     await Sharing.shareAsync(path, {
       mimeType: 'text/csv',
-      dialogTitle: 'Export Atlas Cadence Data',
+      dialogTitle: 'Export DaySync Data',
     });
   }
 }

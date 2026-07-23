@@ -27,9 +27,57 @@ export function formatHour(hour: number): string {
 
 export function getFocusScore(entries: Entry[]): number {
   if (entries.length === 0) return 0;
-  const deep = entries.filter(e => e.focus === 'deep').length;
-  const light = entries.filter(e => e.focus === 'light').length;
-  return Math.round(((deep + light * 0.5) / entries.length) * 100);
+  
+  const sorted = [...entries].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  
+  let totalPoints = 0;
+  
+  // Calculate raw points based on minutes logged
+  for (const entry of sorted) {
+    // Default to 30 mins if intervalMinutes is missing
+    const mins = entry.intervalMinutes || 30;
+    const blocks = mins / 30; // How many 30-min blocks this represents
+
+    if (entry.focus === 'deep') {
+      totalPoints += blocks * 20; // 20 points per 30m block
+    } else if (entry.focus === 'light') {
+      totalPoints += blocks * 10; // 10 points per 30m block
+    } else if (entry.focus === 'off') {
+      totalPoints -= blocks * 10; // -10 points per 30m block
+    } else if (entry.focus === 'neutral') {
+      totalPoints += 0; // Neutral acts as a check-in to pause decay, but gives 0 points
+    }
+  }
+
+  // To reach a score of 100, you need 100 points (5 deep blocks = 2.5 hours)
+  let baseScore = Math.max(0, Math.min(100, totalPoints));
+  
+  // Check if these entries are from today
+  const lastEntry = sorted[sorted.length - 1];
+  const lastEntryDate = new Date(lastEntry.createdAt);
+  const isToday = getDateKey(lastEntryDate) === getDateKey(new Date());
+
+  if (isToday) {
+    const hoursSinceLastLog = (Date.now() - lastEntryDate.getTime()) / (1000 * 60 * 60);
+    // Smart Decay: Give them a 1.5 hour grace period, then decay by 8 points per hour.
+    if (hoursSinceLastLog > 1.5) {
+      const penalty = (hoursSinceLastLog - 1.5) * 8;
+      baseScore = Math.max(0, baseScore - penalty);
+    }
+  }
+
+  return Math.round(baseScore);
+}
+
+export function getDeltaScore(todayEntries: Entry[], yesterdayEntries: Entry[]): number {
+  const todayScore = getFocusScore(todayEntries);
+  const yesterdayScore = getFocusScore(yesterdayEntries);
+  return todayScore - yesterdayScore;
+}
+
+export function getTimeWasted(entries: Entry[]): number {
+  // Returns total minutes wasted based on 'off' focus level
+  return entries.filter(e => e.focus === 'off').reduce((acc, e) => acc + e.intervalMinutes, 0);
 }
 
 export function getTodayEntries(entries: Entry[], dayStartHour = 4): Entry[] {
@@ -93,6 +141,16 @@ export function getLast30DayKeys(dayStartHour = 4): string[] {
   const keys: string[] = [];
   const d = new Date();
   for (let i = 0; i < 30; i++) {
+    keys.unshift(getDateKey(d, dayStartHour));
+    d.setDate(d.getDate() - 1);
+  }
+  return keys;
+}
+
+export function getLast7DayKeys(dayStartHour = 4): string[] {
+  const keys: string[] = [];
+  const d = new Date();
+  for (let i = 0; i < 7; i++) {
     keys.unshift(getDateKey(d, dayStartHour));
     d.setDate(d.getDate() - 1);
   }

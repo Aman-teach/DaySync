@@ -1,24 +1,27 @@
 import React, { useEffect } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { getTag } from '@/constants/tags';
+import * as Haptics from 'expo-haptics';
+import { getTag, TagConfig } from '@/constants/tags';
 
 interface Props {
   tagId: string;
+  tag?: TagConfig;
   selected?: boolean;
   onPress?: () => void;
   size?: 'sm' | 'md';
 }
 
-export function TagChip({ tagId, selected = false, onPress, size = 'sm' }: Props) {
-  const tag = getTag(tagId);
+export function TagChip({ tagId, tag: tagProp, selected = false, onPress, size = 'sm' }: Props) {
+  const tag = tagProp ?? getTag(tagId);
   const label  = tag?.label ?? tagId;
-  const emoji  = tag?.emoji ?? '';
+  const icon   = tag?.icon;
   const bgColor    = tag?.bg    ?? '#E8E8E8';
   const textColor  = tag?.color ?? '#444';
   const isSmall = size === 'sm';
@@ -44,6 +47,7 @@ export function TagChip({ tagId, selected = false, onPress, size = 'sm' }: Props
   };
 
   const handlePress = () => {
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
     // Bounce confirm
     scale.value = withSpring(selected ? 0.95 : 1.08, { damping: 6, stiffness: 300 }, () => {
       scale.value = withSpring(1, { damping: 9, stiffness: 220 });
@@ -69,10 +73,12 @@ export function TagChip({ tagId, selected = false, onPress, size = 'sm' }: Props
           containerStyle,
         ]}
       >
-        {emoji ? (
-          <Text style={[styles.emoji, isSmall ? styles.emojiSm : styles.emojiMd]}>
-            {emoji}
-          </Text>
+        {icon ? (
+          <Feather
+            name={icon}
+            size={isSmall ? 12 : 14}
+            color={selected ? '#fff' : textColor}
+          />
         ) : null}
         <Text
           style={[

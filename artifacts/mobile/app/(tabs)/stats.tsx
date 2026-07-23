@@ -1,9 +1,10 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Platform,
   ScrollView,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -18,9 +19,13 @@ import {
   getFocusScore,
   getDeepWorkByHour,
   getConsecutiveDayStreak,
+  getDateKey,
   formatHour,
+  getDeltaScore,
+  getTimeWasted,
 } from '@/utils/helpers';
 import { getTag } from '@/constants/tags';
+import { Feather } from '@expo/vector-icons';
 
 export default function StatsScreen() {
   const insets = useSafeAreaInsets();
@@ -29,6 +34,21 @@ export default function StatsScreen() {
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
 
   const last30Keys = getLast30DayKeys(settings.dayStartHour);
+  const todayKey = getDateKey(new Date(), settings.dayStartHour);
+  const yesterdayDate = new Date();
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const yesterdayKey = getDateKey(yesterdayDate, settings.dayStartHour);
+
+  const todayEntries = useMemo(() => getEntriesForDate(entries, todayKey), [entries, todayKey]);
+  const yesterdayEntries = useMemo(() => getEntriesForDate(entries, yesterdayKey), [entries, yesterdayKey]);
+
+  const todayScore = getFocusScore(todayEntries);
+  const yesterdayScore = getFocusScore(yesterdayEntries);
+  const delta = getDeltaScore(todayEntries, yesterdayEntries);
+
+  const todayWasted = getTimeWasted(todayEntries);
+  const yesterdayWasted = getTimeWasted(yesterdayEntries);
+  const wasteDelta = todayWasted - yesterdayWasted;
 
   // Build heatmap data
   const heatmapData = useMemo(() => {
@@ -55,17 +75,57 @@ export default function StatsScreen() {
   ];
 
   // Tag breakdown
+  const [tagTimeframe, setTagTimeframe] = useState<'today' | 'yesterday' | 'week' | 'all'>('all');
+
   const tagMinutes = useMemo(() => {
+    let targetEntries = entries;
+    if (tagTimeframe === 'today') {
+      targetEntries = todayEntries;
+    } else if (tagTimeframe === 'yesterday') {
+      targetEntries = yesterdayEntries;
+    } else if (tagTimeframe === 'week') {
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      targetEntries = entries.filter(e => new Date(e.createdAt) >= sevenDaysAgo);
+    }
+    
     const bd: Record<string, number> = {};
-    for (const e of entries) {
+    for (const e of targetEntries) {
       for (const tag of e.tags) {
         bd[tag] = (bd[tag] ?? 0) + e.intervalMinutes;
       }
     }
     return Object.entries(bd).sort((a, b) => b[1] - a[1]).slice(0, 8);
-  }, [entries]);
+  }, [tagTimeframe, todayEntries, yesterdayEntries, entries]);
 
   const maxTagMin = tagMinutes[0]?.[1] ?? 1;
+
+  // Task Breakdown
+  const [taskTimeframe, setTaskTimeframe] = useState<'today' | 'yesterday' | 'week'>('today');
+
+  const taskBreakdown = useMemo(() => {
+    let targetEntries = todayEntries;
+    if (taskTimeframe === 'yesterday') {
+      targetEntries = yesterdayEntries;
+    } else if (taskTimeframe === 'week') {
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      targetEntries = entries.filter(e => new Date(e.createdAt) >= sevenDaysAgo);
+    }
+    
+    const bd: Record<string, { title: string; mins: number }> = {};
+    for (const e of targetEntries) {
+      if (e.taskId && e.taskTitle) {
+        if (!bd[e.taskId]) bd[e.taskId] = { title: e.taskTitle, mins: 0 };
+        bd[e.taskId].mins += e.intervalMinutes;
+      }
+    }
+    return Object.entries(bd)
+      .sort((a, b) => b[1].mins - a[1].mins)
+      .slice(0, 10);
+  }, [taskTimeframe, todayEntries, yesterdayEntries, entries]);
+
+  const maxTaskMin = taskBreakdown[0]?.[1]?.mins ?? 1;
 
   // Deep work by hour
   const deepByHour = useMemo(() => getDeepWorkByHour(entries), [entries]);
@@ -124,7 +184,49 @@ export default function StatsScreen() {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={[styles.pageTitle, { color: colors.foreground }]}>Patterns</Text>
+        <Text style={[styles.pageTitle, { color: colors.foreground }]}>Versus</Text>
+        
+        {/* You vs You Delta */}
+        <View style={styles.versusRow}>
+          <View style={[styles.statCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[styles.bigNum, { color: colors.mutedForeground }]}>{yesterdayScore}</Text>
+            <Text style={[styles.bigLabel, { color: colors.mutedForeground }]}>Yesterday</Text>
+          </View>
+          
+          <View style={[styles.vsBadge, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[styles.vsText, { color: colors.primary }]}>VS</Text>
+          </View>
+
+          <View style={[styles.statCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[styles.bigNum, { color: colors.foreground }]}>{todayScore}</Text>
+            <Text style={[styles.bigLabel, { color: colors.primary }]}>Today</Text>
+          </View>
+        </View>
+
+        {/* Time Waste Trajectory Warning */}
+        {(yesterdayEntries.length > 0 && todayEntries.length > 0 && wasteDelta > 0) && (
+          <View style={[styles.warningCard, { backgroundColor: '#EF444415', borderColor: '#EF444433' }]}>
+            <View style={styles.warningHeader}>
+              <Feather name="alert-triangle" size={18} color="#EF4444" />
+              <Text style={styles.warningTitle}>LEAK TRAJECTORY</Text>
+            </View>
+            <Text style={[styles.warningText, { color: colors.foreground }]}>
+              You spent <Text style={{ fontFamily: 'Inter_700Bold', color: '#EF4444' }}>{wasteDelta} minutes more</Text> on off-focus tasks today compared to yesterday. Your discipline is slipping.
+            </Text>
+          </View>
+        )}
+        
+        {(yesterdayEntries.length > 0 && todayEntries.length > 0 && wasteDelta < 0) && (
+          <View style={[styles.warningCard, { backgroundColor: '#10B98115', borderColor: '#10B98133' }]}>
+            <View style={styles.warningHeader}>
+              <Feather name="trending-down" size={18} color="#10B981" />
+              <Text style={[styles.warningTitle, { color: '#10B981' }]}>LEAK REDUCTION</Text>
+            </View>
+            <Text style={[styles.warningText, { color: colors.foreground }]}>
+              You wasted <Text style={{ fontFamily: 'Inter_700Bold', color: '#10B981' }}>{Math.abs(wasteDelta)} fewer minutes</Text> today than yesterday. Great boundary control.
+            </Text>
+          </View>
+        )}
 
         {/* Focus ring */}
         <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -180,10 +282,83 @@ export default function StatsScreen() {
           </View>
         </View>
 
+        {/* Task Journey */}
+        {/* Task Journey */}
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.cardHeaderRow}>
+            <Text style={[styles.cardTitle, { color: colors.foreground }]}>Task Journey</Text>
+            <View style={[styles.timeframeToggle, { backgroundColor: colors.muted }]}>
+              {(['today', 'yesterday', 'week'] as const).map(tf => (
+                <TouchableOpacity
+                  key={tf}
+                  style={[styles.timeframeBtn, taskTimeframe === tf && { backgroundColor: colors.card, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } }]}
+                  onPress={() => setTaskTimeframe(tf)}
+                >
+                  <Text style={[styles.timeframeText, { color: taskTimeframe === tf ? colors.foreground : colors.mutedForeground }]}>
+                    {tf === 'week' ? '7 Days' : tf.charAt(0).toUpperCase() + tf.slice(1)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+          
+          {taskBreakdown.length > 0 ? (
+            <View style={styles.taskListStats}>
+              {taskBreakdown.map(([taskId, data]) => {
+                const pct = data.mins / maxTaskMin;
+                const hours = Math.floor(data.mins / 60);
+                const minsRem = data.mins % 60;
+                const timeStr = hours > 0 ? `${hours}h ${minsRem}m` : `${minsRem}m`;
+                return (
+                  <View key={taskId} style={styles.taskStatRow}>
+                    <View style={styles.taskStatHeader}>
+                      <Text style={[styles.taskStatTitle, { color: colors.foreground }]} numberOfLines={1}>{data.title}</Text>
+                      <Text style={[styles.tagTime, { color: colors.mutedForeground }]}>{timeStr}</Text>
+                    </View>
+                    <View style={[styles.barTrack, { backgroundColor: colors.muted }]}>
+                      <View
+                        style={[
+                          styles.barFill,
+                          {
+                            width: `${pct * 100}%`,
+                            backgroundColor: colors.primary,
+                          },
+                        ]}
+                      />
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          ) : (
+            <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+              <Text style={{ color: colors.mutedForeground, fontSize: 13, fontFamily: 'Inter_400Regular' }}>
+                No tasks logged for this timeframe.
+              </Text>
+            </View>
+          )}
+        </View>
+
         {/* Tag breakdown */}
-        {tagMinutes.length > 0 && (
-          <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.cardHeaderRow}>
             <Text style={[styles.cardTitle, { color: colors.foreground }]}>Time by Tag</Text>
+            <View style={[styles.timeframeToggle, { backgroundColor: colors.muted }]}>
+              {(['today', 'yesterday', 'week', 'all'] as const).map(tf => (
+                <TouchableOpacity
+                  key={tf}
+                  style={[styles.timeframeBtn, tagTimeframe === tf && { backgroundColor: colors.card, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } }]}
+                  onPress={() => setTagTimeframe(tf)}
+                >
+                  <Text style={[styles.timeframeText, { color: tagTimeframe === tf ? colors.foreground : colors.mutedForeground }]}>
+                    {tf === 'week' ? '7 Days' : (tf === 'all' ? 'All' : tf.charAt(0).toUpperCase() + tf.slice(1))}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+          
+          {tagMinutes.length > 0 ? (
             <View style={styles.tagList}>
               {tagMinutes.map(([tagId, mins]) => {
                 const tag = getTag(tagId);
@@ -212,8 +387,14 @@ export default function StatsScreen() {
                 );
               })}
             </View>
-          </View>
-        )}
+          ) : (
+            <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+              <Text style={{ color: colors.mutedForeground, fontSize: 13, fontFamily: 'Inter_400Regular' }}>
+                No tags logged for this timeframe.
+              </Text>
+            </View>
+          )}
+        </View>
 
         {/* Calendar heatmap */}
         <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -291,4 +472,65 @@ const styles = StyleSheet.create({
   emptyContainer: { flex: 1, alignItems: 'center', gap: 8, paddingHorizontal: 40 },
   emptyTitle: { fontSize: 20, fontFamily: 'Inter_700Bold' },
   emptyText: { fontSize: 14, fontFamily: 'Inter_400Regular', textAlign: 'center', lineHeight: 22 },
+  
+  versusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+    marginVertical: 8,
+    position: 'relative',
+  },
+  vsBadge: {
+    position: 'absolute',
+    left: '50%',
+    marginLeft: -16,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+  },
+  vsText: {
+    fontSize: 12,
+    fontFamily: 'Inter_800ExtraBold',
+  },
+  warningCard: {
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    gap: 8,
+    marginVertical: 4,
+  },
+  warningHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  warningTitle: {
+    fontSize: 12,
+    fontFamily: 'Inter_700Bold',
+    letterSpacing: 1,
+    color: '#EF4444',
+  },
+  warningText: {
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    lineHeight: 20,
+  },
+  cardHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  timeframeToggle: { flexDirection: 'row', borderRadius: 8, padding: 2 },
+  timeframeBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
+  timeframeText: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
+  taskListStats: { gap: 12 },
+  taskStatRow: { gap: 6 },
+  taskStatHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
+  taskStatTitle: { flex: 1, fontSize: 13, fontFamily: 'Inter_500Medium' },
 });

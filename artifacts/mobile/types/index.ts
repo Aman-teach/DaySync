@@ -1,4 +1,4 @@
-export type FocusLevel = 'deep' | 'light' | 'off';
+export type FocusLevel = 'deep' | 'light' | 'neutral' | 'off';
 export type EnergyLevel = 'high' | 'low';
 
 export interface Entry {
@@ -7,10 +7,20 @@ export interface Entry {
   tags: string[];
   focus: FocusLevel;
   energy: EnergyLevel;
+  leverage?: 'high' | 'busywork';
   createdAt: string; // ISO string
   updatedAt: string;
   intervalMinutes: number;
   dateKey: string; // YYYY-MM-DD
+  taskId?: string; // Links to AtlasOS tasks
+  taskTitle?: string;
+  imageUrl?: string; // Local URI of attached photo
+}
+
+export interface AtlasTask {
+  id: string;
+  title: string;
+  status: string;
 }
 
 export interface DaySummary {
@@ -22,6 +32,7 @@ export interface DaySummary {
   focusStreaks: number[];
   mood: string;
   anomalies: string[];
+  guideAdvice?: string;
   createdAt: string;
 }
 
