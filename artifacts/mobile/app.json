@@ -46,7 +46,8 @@
             "enableJetifier": true
           }
         }
-      ]
+      ],
+      "./plugins/withAndroidSupportExclude"
     ],
     "experiments": {
       "typedRoutes": true,
