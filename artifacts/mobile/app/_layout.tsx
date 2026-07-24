@@ -28,6 +28,9 @@ function useProtectedRoute() {
   useEffect(() => {
     if (isLoading) return;
 
+    // Auth state is known. Hide splash screen now.
+    SplashScreen.hideAsync();
+
     const inAuthGroup = segments[0] === '(auth)';
 
     if (!user && !inAuthGroup) {
@@ -64,7 +67,6 @@ function RootLayoutNav() {
       <Stack.Screen
         name="settings"
         options={{ presentation: 'modal', headerShown: false, gestureEnabled: true }}
-      />
     </Stack>
   );
 }
@@ -76,12 +78,6 @@ export default function RootLayout() {
     Inter_600SemiBold,
     Inter_700Bold,
   });
-
-  useEffect(() => {
-    if (fontsLoaded || fontError) {
-      SplashScreen.hideAsync();
-    }
-  }, [fontsLoaded, fontError]);
 
   if (!fontsLoaded && !fontError) return null;
 
