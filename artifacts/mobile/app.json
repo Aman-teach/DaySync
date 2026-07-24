@@ -33,6 +33,12 @@
       "expo-web-browser",
       "expo-notifications",
       [
+        "expo-av",
+        {
+          "microphonePermission": "Allow DaySync to access your microphone for voice check-ins."
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "android": {

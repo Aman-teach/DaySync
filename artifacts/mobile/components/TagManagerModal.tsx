@@ -161,10 +161,12 @@ export function TagManagerModal({ visible, onClose }: Props) {
                       ]}
                     >
                       {/* Icon badge */}
-                      <View style={[styles.tagIconBadge, { backgroundColor: tag.bg }]}>
-                        <Feather name={tag.icon} size={14} color={tag.color} />
+                      <View style={[styles.tagIconBadge, { backgroundColor: tag.bg || '#E8E8E8' }]}>
+                        {typeof tag.icon === 'string' && tag.icon.length > 0 ? (
+                          <Feather name={tag.icon as any} size={14} color={tag.color || '#444'} />
+                        ) : null}
                       </View>
-                      <Text style={[styles.tagLabel, { color: colors.foreground }]}>{tag.label}</Text>
+                      <Text style={[styles.tagLabel, { color: colors.foreground }]}>{tag.label || 'Unknown Tag'}</Text>
                       <View style={styles.tagActions}>
                         <Pressable
                           onPress={() => openEdit(tag)}
