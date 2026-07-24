@@ -8,8 +8,7 @@
     "web": "expo start --web",
     "build": "node scripts/build.js",
     "serve": "node server/serve.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "postinstall": "npx jetify"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
@@ -43,6 +42,7 @@
     "expo-system-ui": "~6.0.9",
     "expo-web-browser": "~15.0.10",
     "jetifier": "^2.0.0",
+    "patch-package": "^8.0.1",
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-native": "0.81.5",

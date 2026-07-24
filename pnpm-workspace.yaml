@@ -80,7 +80,6 @@ allowBuilds:
   msw: true
   unrs-resolver: true
 
-
 overrides:
   # replit uses linux-x64 only, we can exclude all other platforms
   "esbuild>@esbuild/darwin-arm64": "-"
@@ -170,3 +169,5 @@ overrides:
   "react": "19.1.0"
   "react-dom": "19.1.0"
 
+patchedDependencies:
+  '@react-native-voice/voice': patches/@react-native-voice__voice.patch
