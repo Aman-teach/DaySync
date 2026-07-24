@@ -13,7 +13,7 @@
  * This plugin injects a `configurations.all { exclude ... }` block into
  * the generated app/build.gradle at EAS build time.
  */
-const { withAppBuildGradle } = require('@expo/config-plugins');
+const { withAppBuildGradle } = require('expo/config-plugins');
 
 const withAndroidSupportExclude = (config) => {
   return withAppBuildGradle(config, (mod) => {
