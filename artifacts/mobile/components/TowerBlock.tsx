@@ -38,6 +38,14 @@ const BLOCK_PALETTES = {
     glow:   '#E9C46A30',
     label:  'Light',
   },
+  neutral: {
+    top:    '#818CF8',
+    front:  '#4F46E5',
+    side:   '#3730A3',
+    accent: '#A5B4FC',
+    glow:   '#6366F130',
+    label:  'Neutral',
+  },
   off: {
     top:    '#9CA3AF',
     front:  '#4B5563',

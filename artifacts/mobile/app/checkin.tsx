@@ -602,7 +602,7 @@ export default function CheckinScreen() {
         <View style={{ flexDirection: 'row', gap: 8 }}>
           <Pressable
             style={[
-              { flex: 1, paddingVertical: 8, paddingHorizontal: 6, borderRadius: 100, borderWidth: leverage === 'high' ? 0 : 1.5, alignItems: 'center', justifyContent: 'center', paddingVertical: leverage === 'high' ? 9.5 : 8 },
+              { flex: 1, paddingHorizontal: 6, borderRadius: 100, borderWidth: leverage === 'high' ? 0 : 1.5, alignItems: 'center', justifyContent: 'center', paddingVertical: leverage === 'high' ? 9.5 : 8 },
               leverage === 'high' 
                 ? { backgroundColor: '#4F46E5', borderColor: '#4F46E5' } // Indigo
                 : { backgroundColor: isRecording ? '#ffffff11' : colors.card, borderColor: isRecording ? '#ffffff22' : colors.border }
@@ -619,7 +619,7 @@ export default function CheckinScreen() {
           </Pressable>
           <Pressable
              style={[
-              { flex: 1, paddingVertical: 8, paddingHorizontal: 6, borderRadius: 100, borderWidth: leverage === 'busywork' ? 0 : 1.5, alignItems: 'center', justifyContent: 'center', paddingVertical: leverage === 'busywork' ? 9.5 : 8 },
+              { flex: 1, paddingHorizontal: 6, borderRadius: 100, borderWidth: leverage === 'busywork' ? 0 : 1.5, alignItems: 'center', justifyContent: 'center', paddingVertical: leverage === 'busywork' ? 9.5 : 8 },
               leverage === 'busywork' 
                 ? { backgroundColor: '#F59E0B', borderColor: '#F59E0B' } // Amber
                 : { backgroundColor: isRecording ? '#ffffff11' : colors.card, borderColor: isRecording ? '#ffffff22' : colors.border }
