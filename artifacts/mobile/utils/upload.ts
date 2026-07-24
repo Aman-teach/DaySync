@@ -73,3 +73,36 @@ export async function uploadImageToAppwrite(localUri: string): Promise<string | 
     }
   }
 }
+
+export async function uploadAudioToAppwrite(localUri: string): Promise<string | null> {
+  await ensureSession();
+
+  try {
+    const fileName = localUri.split('/').pop() || `audio_${Date.now()}.m4a`;
+    const type = 'audio/m4a';
+    
+    const fileInfo = await FileSystem.getInfoAsync(localUri);
+
+    const fileObj = {
+      name: fileName,
+      type: type,
+      uri: localUri,
+      size: fileInfo.exists ? fileInfo.size : 0,
+    } as any;
+
+    const uploadedFile = await storage.createFile(
+      APPWRITE_CONFIG.IMAGES_BUCKET_ID,
+      ID.unique(),
+      fileObj
+    );
+
+    const fileUrl = (storage as any).getFilePreviewURL
+      ? (storage as any).getFilePreviewURL(APPWRITE_CONFIG.IMAGES_BUCKET_ID, uploadedFile.$id).toString()
+      : storage.getFilePreview(APPWRITE_CONFIG.IMAGES_BUCKET_ID, uploadedFile.$id);
+
+    return fileUrl.toString();
+  } catch (e: any) {
+    console.error('Audio Upload Error:', e);
+    return null;
+  }
+}

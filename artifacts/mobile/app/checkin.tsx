@@ -2,7 +2,7 @@
  * Check-in modal — completely redesigned premium UI
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Voice } from '../utils/voice';
+import { Audio } from 'expo-av';
 import {
   Alert,
   Dimensions,
@@ -30,7 +30,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { useApp } from '@/context/AppContext';
-import { uploadImageToAppwrite } from '@/utils/upload';
+import { uploadImageToAppwrite, uploadAudioToAppwrite } from '@/utils/upload';
 import { saveCheckinDraft, loadCheckinDraft, clearCheckinDraft } from '@/utils/storage';
 import { getRandomPrompt } from '@/constants/prompts';
 import { FocusEnergyPicker } from '@/components/FocusEnergyPicker';
@@ -41,8 +41,6 @@ import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { FocusLevel, EnergyLevel } from '@/types';
 import { functions, APPWRITE_CONFIG, ExecutionMethod } from '@/lib/appwrite';
-
-import { Audio } from 'expo-av';
 
 type VoiceState = 'idle' | 'recording' | 'processing' | 'transcribed';
 type Mode = 'text' | 'voice';
@@ -167,22 +165,11 @@ export default function CheckinScreen() {
   const inputRef      = useRef<TextInput>(null);
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Setup Voice listeners for native
+  // Clean up recording if unmounted
   useEffect(() => {
-    if (Platform.OS !== 'web') {
-      Voice.onSpeechResults = (e: any) => {
-        if (e.value && e.value.length > 0) setText(e.value[0]);
-      };
-      Voice.onSpeechPartialResults = (e: any) => {
-        if (e.value && e.value.length > 0) setText(e.value[0]);
-      };
-      Voice.onSpeechError = (e: any) => {
-        setTxError(e.error?.message || 'Error transcribing');
-      };
-    }
     return () => {
-      if (Platform.OS !== 'web') {
-        Voice.destroy().then(Voice.removeAllListeners);
+      if (recordingRef.current) {
+        recordingRef.current.stopAndUnloadAsync().catch(() => {});
       }
     };
   }, []);
@@ -222,11 +209,7 @@ export default function CheckinScreen() {
   useEffect(() => () => {
     if (timerRef.current) clearInterval(timerRef.current);
     if (recordingRef.current) {
-      if (Platform.OS === 'web') {
-        recordingRef.current.stop();
-      } else {
-        Voice.stop().catch(() => {});
-      }
+      recordingRef.current.stopAndUnloadAsync().catch(() => {});
     }
   }, []);
 
@@ -240,47 +223,22 @@ export default function CheckinScreen() {
     if (voiceState === 'recording') return;
     
     try {
-      if (Platform.OS === 'web') {
-        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-        if (!SpeechRecognition) {
-          Alert.alert('Not supported', 'Live speech recognition is not supported in this browser.');
-          return;
-        }
-        const recognition = new SpeechRecognition();
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        
-        let finalTranscript = '';
-        recognition.onresult = (event: any) => {
-          let interimTranscript = '';
-          for (let i = event.resultIndex; i < event.results.length; ++i) {
-            if (event.results[i].isFinal) {
-              finalTranscript += event.results[i][0].transcript;
-            } else {
-              interimTranscript += event.results[i][0].transcript;
-            }
-          }
-          setText(finalTranscript + interimTranscript);
-        };
-        recognition.onerror = (e: any) => {
-          if (e.error === 'network') {
-            setTxError('Network blocked. (Brave browser blocks live transcription. Try Chrome or build the APK!)');
-          } else {
-            setTxError(e.error);
-          }
-        };
-        recognition.start();
-        recordingRef.current = recognition;
-      } else {
-        const { status } = await Audio.requestPermissionsAsync();
-        if (status !== 'granted') {
-          Alert.alert('Permission needed', 'Please grant microphone access to use voice typing.');
-          return;
-        }
-        await Voice.start('en-US');
-        recordingRef.current = true; // Just mark as active
+      const { status } = await Audio.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Please grant microphone access to record audio.');
+        return;
       }
+      
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
 
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      
+      recordingRef.current = recording;
       setVoiceState('recording');
       setTxError('');
       setElapsed(0);
@@ -301,21 +259,39 @@ export default function CheckinScreen() {
     greenAnim.value = withTiming(0, { duration: 420 });
 
     try {
-      if (Platform.OS === 'web') {
-        if (recordingRef.current) {
-          recordingRef.current.stop();
-          recordingRef.current = null;
-        }
-      } else {
-        await Voice.stop();
+      if (recordingRef.current) {
+        await recordingRef.current.stopAndUnloadAsync();
+        const uri = recordingRef.current.getURI();
         recordingRef.current = null;
-      }
+        
+        if (uri) {
+          // Upload and transcribe
+          const uploadedUrl = await uploadAudioToAppwrite(uri);
+          if (uploadedUrl) {
+            const execution = await functions.createExecution(
+              APPWRITE_CONFIG.FUNCTIONS.TRANSCRIBE,
+              JSON.stringify({ fileUrl: uploadedUrl }),
+              false,
+              '/v1/executions',
+              ExecutionMethod.POST,
+              { 'Content-Type': 'application/json' }
+            );
 
+            if (execution.status === 'completed') {
+              const res = JSON.parse(execution.responseBody);
+              setText(prev => (prev ? prev + ' ' + res.text : res.text));
+              try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
+            } else {
+              setTxError('Transcription failed.');
+            }
+          } else {
+            setTxError('Could not upload audio.');
+          }
+        }
+      }
       setVoiceState('transcribed');
-      // The text is already populated via live streaming callbacks
-      if (text) { try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {} }
-    } catch {
-      setTxError('Could not stop recording');
+    } catch (e: any) {
+      setTxError(e.message || 'Could not stop recording');
       setVoiceState('transcribed');
     }
   }, [greenAnim, text]);

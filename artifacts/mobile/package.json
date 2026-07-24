@@ -58,7 +58,6 @@
   },
   "dependencies": {
     "@react-native-community/netinfo": "^11.4.1",
-    "@react-native-voice/voice": "^3.2.4",
     "expo-av": "~16.0.8",
     "expo-build-properties": "^57.0.7",
     "expo-file-system": "^19.0.23",

@@ -33,21 +33,13 @@
       "expo-web-browser",
       "expo-notifications",
       [
-        "@react-native-voice/voice",
-        {
-          "microphonePermission": "Allow Cadence to access your microphone to transcribe your logs.",
-          "speechRecognitionPermission": "Allow Cadence to securely recognize your speech."
-        }
-      ],
-      [
         "expo-build-properties",
         {
           "android": {
             "enableJetifier": true
           }
         }
-      ],
-      "./plugins/withAndroidSupportExclude"
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

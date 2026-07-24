@@ -8,7 +8,8 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { getTag, TagConfig } from '@/constants/tags';
+import { getTag, TagConfig, TAGS } from '@/constants/tags';
+import { useApp } from '@/context/AppContext';
 
 interface Props {
   tagId: string;
@@ -19,7 +20,10 @@ interface Props {
 }
 
 export function TagChip({ tagId, tag: tagProp, selected = false, onPress, size = 'sm' }: Props) {
-  const tag = tagProp ?? getTag(tagId);
+  // Use the context tags to ensure custom tags are resolved properly
+  const { tags } = useApp();
+  
+  const tag = tagProp ?? tags.find(t => t.id === tagId) ?? getTag(tagId);
   const label  = tag?.label ?? tagId;
   const icon   = tag?.icon;
   const bgColor    = tag?.bg    ?? '#E8E8E8';
@@ -73,9 +77,9 @@ export function TagChip({ tagId, tag: tagProp, selected = false, onPress, size =
           containerStyle,
         ]}
       >
-        {icon ? (
+        {typeof icon === 'string' && icon.length > 0 ? (
           <Feather
-            name={icon}
+            name={icon as any}
             size={isSmall ? 12 : 14}
             color={selected ? '#fff' : textColor}
           />
