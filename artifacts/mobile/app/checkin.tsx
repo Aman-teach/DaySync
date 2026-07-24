@@ -798,52 +798,54 @@ export default function CheckinScreen() {
 
         {/* ── VOICE MODE ─────────────────────────────────────────── */}
         {step === 1 && mode === 'voice' && (
-          <View style={{ flex: 1, paddingHorizontal: 4, paddingTop: 16 }}>
+          <View style={{ flex: 1, paddingHorizontal: 4, paddingTop: 16, justifyContent: 'space-between' }}>
             
-            {/* Massive Cinematic Transcript Box */}
-            <Pressable style={{ flex: 1 }} onPress={() => inputRef.current?.focus()}>
-              <TextInput
-                ref={inputRef}
-                style={[
-                  styles.input, 
-                  { 
-                    color: isRecording ? '#ffffff' : colors.foreground, 
-                    flex: 1, 
-                    minHeight: 200,
-                    fontSize: 32, 
-                    lineHeight: 40, 
-                    fontFamily: 'Inter_300Light' 
-                  }
-                ]}
-                placeholder={isRecording ? "I'm listening..." : isProcessing ? "Transcribing..." : "Tap the mic to start..."}
-                placeholderTextColor={isRecording ? '#ffffff88' : (colors.mutedForeground + '66')}
-                multiline
-                value={text}
-                onChangeText={setText}
-                textAlignVertical="top"
-                selectionColor={isRecording ? '#ffffff' : colors.primary}
-                editable={!isRecording && !isProcessing}
-              />
-            </Pressable>
+            <View style={{ flex: 1 }}>
+              {/* Massive Cinematic Transcript Box */}
+              <Pressable style={{ flex: 1 }} onPress={() => inputRef.current?.focus()}>
+                <TextInput
+                  ref={inputRef}
+                  style={[
+                    styles.input, 
+                    { 
+                      color: isRecording ? '#ffffff' : colors.foreground, 
+                      flex: 1, 
+                      minHeight: 200,
+                      fontSize: 32, 
+                      lineHeight: 40, 
+                      fontFamily: 'Inter_300Light' 
+                    }
+                  ]}
+                  placeholder={isRecording ? "I'm listening..." : isProcessing ? "Transcribing..." : "Tap the mic to start..."}
+                  placeholderTextColor={isRecording ? '#ffffff88' : (colors.mutedForeground + '66')}
+                  multiline
+                  value={text}
+                  onChangeText={setText}
+                  textAlignVertical="top"
+                  selectionColor={isRecording ? '#ffffff' : colors.primary}
+                  editable={!isRecording && !isProcessing}
+                />
+              </Pressable>
 
-            {txError ? (
-              <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: '#EF4444', marginBottom: 12 }}>{txError}</Text>
-            ) : null}
-            
-            {imageUrl && (
-              <View style={{ marginBottom: 20, position: 'relative', marginTop: 12 }}>
-                <Image source={{ uri: imageUrl }} style={{ width: '100%', height: 260, borderRadius: 16 }} resizeMode="cover" />
-                <TouchableOpacity 
-                  onPress={() => setImageUrl(undefined)}
-                  style={{ position: 'absolute', top: 12, right: 12, backgroundColor: 'rgba(0,0,0,0.6)', padding: 8, borderRadius: 100 }}
-                >
-                  <Feather name="x" size={16} color="#fff" />
-                </TouchableOpacity>
-              </View>
-            )}
+              {txError ? (
+                <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: '#EF4444', marginBottom: 12 }}>{txError}</Text>
+              ) : null}
+              
+              {imageUrl && (
+                <View style={{ marginBottom: 20, position: 'relative', marginTop: 12 }}>
+                  <Image source={{ uri: imageUrl }} style={{ width: '100%', height: 260, borderRadius: 16 }} resizeMode="cover" />
+                  <TouchableOpacity 
+                    onPress={() => setImageUrl(undefined)}
+                    style={{ position: 'absolute', top: 12, right: 12, backgroundColor: 'rgba(0,0,0,0.6)', padding: 8, borderRadius: 100 }}
+                  >
+                    <Feather name="x" size={16} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
 
             {/* Bottom Controls */}
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, paddingBottom: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: isRecording ? '#ffffff22' : colors.border }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto', paddingBottom: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: isRecording ? '#ffffff22' : colors.border }}>
               {/* Attach Photo (Left) */}
               <TouchableOpacity 
                 onPress={handleAttachPhoto} 
