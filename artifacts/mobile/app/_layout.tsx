@@ -67,6 +67,7 @@ function RootLayoutNav() {
       <Stack.Screen
         name="settings"
         options={{ presentation: 'modal', headerShown: false, gestureEnabled: true }}
+      />
     </Stack>
   );
 }
