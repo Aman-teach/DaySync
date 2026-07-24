@@ -272,6 +272,11 @@ export default function CheckinScreen() {
         recognition.start();
         recordingRef.current = recognition;
       } else {
+        const { status } = await Audio.requestPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Permission needed', 'Please grant microphone access to use voice typing.');
+          return;
+        }
         await Voice.start('en-US');
         recordingRef.current = true; // Just mark as active
       }
