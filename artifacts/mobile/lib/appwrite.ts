@@ -1,11 +1,17 @@
 import { Client, Databases, Account, Storage, Functions } from 'react-native-appwrite';
 import { APPWRITE_CONFIG } from '@/constants/appwriteConfig';
 
+import { Platform } from 'react-native';
+
 export const client = new Client();
 
 client
   .setEndpoint(APPWRITE_CONFIG.ENDPOINT)
   .setProject(APPWRITE_CONFIG.PROJECT_ID);
+
+if (Platform.OS === 'android') {
+  client.setPlatform('com.createbyaman.cadence');
+}
 
 export const databases = new Databases(client);
 export const account = new Account(client);
