@@ -38,6 +38,14 @@
           "microphonePermission": "Allow Cadence to access your microphone to transcribe your logs.",
           "speechRecognitionPermission": "Allow Cadence to securely recognize your speech."
         }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableJetifier": true
+          }
+        }
       ]
     ],
     "experiments": {
