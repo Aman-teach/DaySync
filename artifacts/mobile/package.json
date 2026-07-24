@@ -8,7 +8,8 @@
     "web": "expo start --web",
     "build": "node scripts/build.js",
     "serve": "node server/serve.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "postinstall": "npx jetify"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
@@ -54,7 +55,8 @@
     "react-native-worklets": "0.5.1",
     "typescript": "~5.9.2",
     "zod": "catalog:",
-    "zod-validation-error": "^3.4.0"
+    "zod-validation-error": "^3.4.0",
+    "jetifier": "^2.0.0"
   },
   "dependencies": {
     "@react-native-community/netinfo": "^11.4.1",
