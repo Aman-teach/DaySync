@@ -91,14 +91,15 @@ export default function StatsScreen() {
     
     const bd: Record<string, number> = {};
     for (const e of targetEntries) {
+      if (!e.tags) continue; // Safe fallback for corrupted old entries
       for (const tag of e.tags) {
-        bd[tag] = (bd[tag] ?? 0) + e.intervalMinutes;
+        bd[tag] = (bd[tag] ?? 0) + (e.intervalMinutes || 0);
       }
     }
     return Object.entries(bd).sort((a, b) => b[1] - a[1]).slice(0, 8);
   }, [tagTimeframe, todayEntries, yesterdayEntries, entries]);
 
-  const maxTagMin = tagMinutes[0]?.[1] ?? 1;
+  const maxTagMin = Math.max(tagMinutes[0]?.[1] ?? 1, 1);
 
   // Task Breakdown
   const [taskTimeframe, setTaskTimeframe] = useState<'today' | 'yesterday' | 'week'>('today');
@@ -117,7 +118,7 @@ export default function StatsScreen() {
     for (const e of targetEntries) {
       if (e.taskId && e.taskTitle) {
         if (!bd[e.taskId]) bd[e.taskId] = { title: e.taskTitle, mins: 0 };
-        bd[e.taskId].mins += e.intervalMinutes;
+        bd[e.taskId].mins += (e.intervalMinutes || 0);
       }
     }
     return Object.entries(bd)
@@ -125,7 +126,7 @@ export default function StatsScreen() {
       .slice(0, 10);
   }, [taskTimeframe, todayEntries, yesterdayEntries, entries]);
 
-  const maxTaskMin = taskBreakdown[0]?.[1]?.mins ?? 1;
+  const maxTaskMin = Math.max(taskBreakdown[0]?.[1]?.mins ?? 1, 1);
 
   // Deep work by hour
   const deepByHour = useMemo(() => getDeepWorkByHour(entries), [entries]);
