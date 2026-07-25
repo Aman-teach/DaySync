@@ -290,10 +290,25 @@ export default function CheckinScreen() {
         recordingRef.current = null;
         
         if (uri) {
-          // Read audio file as base64 string
-          const base64Audio = await FileSystem.readAsStringAsync(uri, {
-            encoding: FileSystem.EncodingType.Base64,
-          });
+          // Read audio file as base64 string cross-platform
+          let base64Audio = '';
+          if (Platform.OS === 'web') {
+            const response = await fetch(uri);
+            const blob = await response.blob();
+            base64Audio = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => {
+                const dataUrl = reader.result as string;
+                resolve(dataUrl.split(',')[1] || '');
+              };
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+          } else {
+            base64Audio = await FileSystem.readAsStringAsync(uri, {
+              encoding: FileSystem.EncodingType.Base64,
+            });
+          }
 
           // Send base64 audio directly to the Transcribe function (bypassing the storage bucket)
           const execution = await functions.createExecution(
