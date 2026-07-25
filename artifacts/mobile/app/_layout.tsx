@@ -12,7 +12,7 @@ import {
   useFonts,
 } from '@expo-google-fonts/inter';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { Stack, useRouter, useSegments, Redirect } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { AppProvider } from '@/context/AppContext';
 
@@ -20,13 +20,18 @@ SplashScreen.preventAutoHideAsync();
 
 const queryClient = new QueryClient();
 
-function useProtectedRoute() {
+function RootLayoutNav() {
   const { user, isLoading } = useAuth();
   const segments = useSegments();
   const router = useRouter();
+  const [isReady, setIsReady] = React.useState(false);
 
-  useEffect(() => {
-    if (isLoading) return;
+  React.useEffect(() => {
+    setIsReady(true);
+  }, []);
+
+  React.useEffect(() => {
+    if (isLoading || !isReady) return;
 
     const inAuthGroup = segments[0] === '(auth)';
 
@@ -35,11 +40,7 @@ function useProtectedRoute() {
     } else if (user && inAuthGroup) {
       router.replace('/(tabs)');
     }
-  }, [user, isLoading, segments]);
-}
-
-function RootLayoutNav() {
-  useProtectedRoute();
+  }, [user, isLoading, segments, isReady]);
   
   return (
     <Stack screenOptions={{ headerBackTitle: 'Back' }}>
