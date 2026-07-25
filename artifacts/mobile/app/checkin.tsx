@@ -37,7 +37,7 @@ import { FocusEnergyPicker } from '@/components/FocusEnergyPicker';
 import { TagChip } from '@/components/TagChip';
 import { Feather } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { FocusLevel, EnergyLevel } from '@/types';
