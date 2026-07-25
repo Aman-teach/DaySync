@@ -235,9 +235,32 @@ export default function CheckinScreen() {
         playsInSilentModeIOS: true,
       });
 
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
+      // Start recording with high compatibility options (MONO channel to prevent hardware encoder failure on some Androids)
+      const { recording } = await Audio.Recording.createAsync({
+        android: {
+          extension: '.m4a',
+          outputFormat: Audio.AndroidOutputFormat.MPEG_4,
+          audioEncoder: Audio.AndroidAudioEncoder.AAC,
+          sampleRate: 44100,
+          numberOfChannels: 1, // Strict MONO for Android compatibility
+          bitRate: 128000,
+        },
+        ios: {
+          extension: '.m4a',
+          outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
+          audioQuality: Audio.IOSAudioQuality.HIGH,
+          sampleRate: 44100,
+          numberOfChannels: 1,
+          bitRate: 128000,
+          linearPCMBitDepth: 16,
+          linearPCMIsBigEndian: false,
+          linearPCMIsFloat: false,
+        },
+        web: {
+          mimeType: 'audio/webm',
+          bitsPerSecond: 128000,
+        },
+      });
       
       recordingRef.current = recording;
       setVoiceState('recording');
@@ -246,11 +269,12 @@ export default function CheckinScreen() {
       greenAnim.value = withTiming(1, { duration: 500 });
       timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
       try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy); } catch {}
-    } catch (e) {
+    } catch (e: any) {
       console.log('Failed to start recording', e);
+      setTxError(e.message || 'Failed to start recording');
       recordingRef.current = null;
     }
-  }, [greenAnim, micScale]);
+  }, [greenAnim]);
 
   const stopRecording = useCallback(async () => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
@@ -296,8 +320,12 @@ export default function CheckinScreen() {
       }
       setVoiceState('transcribed');
     } catch (e: any) {
+      console.log('Failed to stop recording', e);
       setTxError(e.message || 'Could not stop recording');
       setVoiceState('transcribed');
+      if (recordingRef.current) {
+        recordingRef.current = null;
+      }
     }
   }, [greenAnim, text]);
 
