@@ -72,7 +72,7 @@ export function TagChip({ tagId, tag: tagProp, selected = false, onPress, size =
           {
             backgroundColor: selected ? tag?.color ?? '#2D6A4F' : bgColor,
             borderWidth: selected ? 0 : 1.5,
-            borderColor: (tag?.color ?? '#ccc') + '55',
+            borderColor: (tag?.color ?? '#cccccc') + '55',
           },
           containerStyle,
         ]}
