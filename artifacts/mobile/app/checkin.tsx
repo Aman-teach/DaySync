@@ -37,6 +37,7 @@ import { FocusEnergyPicker } from '@/components/FocusEnergyPicker';
 import { TagChip } from '@/components/TagChip';
 import { Feather } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import * as FileSystem from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { FocusLevel, EnergyLevel } from '@/types';
@@ -265,27 +266,31 @@ export default function CheckinScreen() {
         recordingRef.current = null;
         
         if (uri) {
-          // Upload and transcribe
-          const uploadedUrl = await uploadAudioToAppwrite(uri);
-          if (uploadedUrl) {
-            const execution = await functions.createExecution(
-              APPWRITE_CONFIG.FUNCTIONS.TRANSCRIBE,
-              JSON.stringify({ fileUrl: uploadedUrl }),
-              false,
-              '/v1/executions',
-              ExecutionMethod.POST,
-              { 'Content-Type': 'application/json' }
-            );
+          // Read audio file as base64 string
+          const base64Audio = await FileSystem.readAsStringAsync(uri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
 
-            if (execution.status === 'completed') {
-              const res = JSON.parse(execution.responseBody);
-              setText(prev => (prev ? prev + ' ' + res.text : res.text));
-              try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
+          // Send base64 audio directly to the Transcribe function (bypassing the storage bucket)
+          const execution = await functions.createExecution(
+            APPWRITE_CONFIG.FUNCTIONS.TRANSCRIBE,
+            JSON.stringify({ audio: base64Audio, mimeType: 'audio/m4a' }),
+            false,
+            '/v1/executions',
+            ExecutionMethod.POST,
+            { 'Content-Type': 'application/json' }
+          );
+
+          if (execution.status === 'completed') {
+            const res = JSON.parse(execution.responseBody);
+            if (res.error) {
+              setTxError(`Transcription failed: ${res.error}`);
             } else {
-              setTxError('Transcription failed.');
+              setText(prev => (prev ? prev + ' ' + res.transcript : res.transcript));
+              try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
             }
           } else {
-            setTxError('Could not upload audio.');
+            setTxError('Transcription failed.');
           }
         }
       }
