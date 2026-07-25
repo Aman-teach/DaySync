@@ -306,7 +306,7 @@ export default function CheckinScreen() {
             });
           } else {
             base64Audio = await FileSystem.readAsStringAsync(uri, {
-              encoding: FileSystem.EncodingType.Base64,
+              encoding: 'base64',
             });
           }
 
