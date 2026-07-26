@@ -8,7 +8,9 @@
     "web": "expo start --web",
     "build": "node scripts/build.js",
     "serve": "node server/serve.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
@@ -58,11 +60,14 @@
   },
   "dependencies": {
     "@react-native-community/netinfo": "^11.4.1",
+    "expo": "~54.0.36",
     "expo-av": "~16.0.8",
-    "expo-build-properties": "^57.0.7",
+    "expo-build-properties": "^1.0.10",
     "expo-file-system": "^19.0.23",
     "expo-notifications": "^0.32.17",
     "expo-sharing": "^14.0.8",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
     "react-native-appwrite": "^0.34.0"
   }
 }

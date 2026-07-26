@@ -16,5 +16,8 @@
   "devDependencies": {
     "prettier": "^3.9.5",
     "typescript": "~5.9.3"
+  },
+  "resolutions": {
+    "expo-file-system": "19.0.23"
   }
 }
