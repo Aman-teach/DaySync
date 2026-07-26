@@ -326,8 +326,8 @@ export default function TodayScreen() {
         style={[
           styles.fab,
           {
-            bottom: Platform.OS === 'web' ? 90 : insets.bottom + 70,
-            right: 20,
+            bottom: Platform.OS === 'web' ? 40 : insets.bottom + 20,
+            right: 40,
           },
         ]}
       >

@@ -55,7 +55,7 @@ export function StatsRing({
           strokeWidth={strokeWidth}
         />
         {/* Segments */}
-        {arcs.map((arc, i) => (
+        {total > 0 && arcs.filter(arc => arc.value > 0).map((arc, i) => (
           <Circle
             key={i}
             cx={cx}
@@ -64,11 +64,10 @@ export function StatsRing({
             fill="none"
             stroke={arc.color}
             strokeWidth={strokeWidth}
-            strokeDasharray={`${arc.dash} ${arc.gap}`}
+            strokeDasharray={`${arc.dash},${arc.gap}`}
             strokeDashoffset={arc.strokeDashoffset}
             strokeLinecap="butt"
-            rotation={-90}
-            origin={`${cx}, ${cy}`}
+            transform={`rotate(-90, ${cx}, ${cy})`}
           />
         ))}
       </Svg>

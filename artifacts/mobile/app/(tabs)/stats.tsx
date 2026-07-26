@@ -266,7 +266,7 @@ export default function StatsScreen() {
                     style={[
                       styles.hourBar,
                       {
-                        height: barH,
+                        height: isNaN(barH) ? 2 : barH,
                         backgroundColor: count > 0 ? colors.primary : colors.muted,
                         opacity: isActive ? 1 : 0.4,
                       },
@@ -321,7 +321,7 @@ export default function StatsScreen() {
                         style={[
                           styles.barFill,
                           {
-                            width: `${pct * 100}%`,
+                            width: `${(isNaN(pct) ? 0 : pct) * 100}%`,
                             backgroundColor: colors.primary,
                           },
                         ]}
@@ -378,7 +378,7 @@ export default function StatsScreen() {
                         style={[
                           styles.barFill,
                           {
-                            width: `${pct * 100}%`,
+                            width: `${(isNaN(pct) ? 0 : pct) * 100}%`,
                             backgroundColor: tag?.color ?? colors.primary,
                           },
                         ]}
