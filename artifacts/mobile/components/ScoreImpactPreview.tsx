@@ -19,12 +19,16 @@ export function ScoreImpactPreview({ focus }: Props) {
     switch (focus) {
       case 'deep':
         return { text: '+20 Focus Points', color: '#10B981', icon: 'zap' as const };
+      case 'normal':
       case 'light':
         return { text: '+10 Focus Points', color: '#0891B2', icon: 'sun' as const };
       case 'neutral':
         return { text: 'Score Paused', color: '#9CA3AF', icon: 'coffee' as const };
+      case 'distracted':
       case 'off':
         return { text: '-10 Focus Points', color: '#F43F5E', icon: 'alert-circle' as const };
+      default:
+        return { text: 'Score Paused', color: '#9CA3AF', icon: 'circle' as const };
     }
   };
 

@@ -21,7 +21,7 @@ export function getBrickHeight(intervalMinutes: number): number {
 }
 
 // ─── Block palettes ──────────────────────────────────────────────────────────
-const BLOCK_PALETTES = {
+const BLOCK_PALETTES: Record<string, { top: string; front: string; side: string; accent: string; glow: string; label: string }> = {
   deep: {
     top:    '#52B788',
     front:  '#2D6A4F',
@@ -30,13 +30,22 @@ const BLOCK_PALETTES = {
     glow:   '#52B78840',
     label:  'Deep',
   },
+  normal: {
+    top:    '#60A5FA',
+    front:  '#2563EB',
+    side:   '#1D4ED8',
+    accent: '#93C5FD',
+    glow:   '#3B82F640',
+    label:  'Normal',
+  },
+  // legacy alias
   light: {
-    top:    '#F4D03F',
-    front:  '#C49A3C',
-    side:   '#8B6914',
-    accent: '#F7DC6F',
-    glow:   '#E9C46A30',
-    label:  'Light',
+    top:    '#60A5FA',
+    front:  '#2563EB',
+    side:   '#1D4ED8',
+    accent: '#93C5FD',
+    glow:   '#3B82F640',
+    label:  'Normal',
   },
   neutral: {
     top:    '#818CF8',
@@ -46,6 +55,15 @@ const BLOCK_PALETTES = {
     glow:   '#6366F130',
     label:  'Neutral',
   },
+  distracted: {
+    top:    '#FCA5A5',
+    front:  '#DC2626',
+    side:   '#991B1B',
+    accent: '#FECACA',
+    glow:   '#EF444440',
+    label:  'Distracted',
+  },
+  // legacy alias
   off: {
     top:    '#9CA3AF',
     front:  '#4B5563',

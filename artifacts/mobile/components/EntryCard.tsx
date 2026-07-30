@@ -16,10 +16,12 @@ import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'react-native';
 
-const FOCUS_COLORS = {
+const FOCUS_COLORS: Record<string, string> = {
   deep: '#2563EB',
-  light: '#06B6D4',
+  normal: '#0891B2',
+  distracted: '#F59E0B',
   neutral: '#9CA3AF',
+  light: '#06B6D4',
   off: '#64748B',
 };
 
@@ -32,8 +34,11 @@ interface Props {
 
 export function EntryCard({ entry, compact }: Props) {
   const colors = useColors();
-  const { removeEntry } = useApp();
+  const { removeEntry, domains, activities } = useApp();
   const router = useRouter();
+
+  const domain = entry.domainId ? domains.find(d => d.id === entry.domainId) : null;
+  const activity = entry.activityId ? activities.find(a => a.id === entry.activityId) : null;
 
   const handleLongPress = () => {
     try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
@@ -179,9 +184,20 @@ export function EntryCard({ entry, compact }: Props) {
             </View>
           )}
 
-          {(!compact && entry.tags.length > 0) && (
+          {(!compact) && (
             <View style={styles.tags}>
-              {entry.tags.map(t => (
+              {domain && (
+                <View style={[styles.linkedTaskBadge, { backgroundColor: (domain.color || colors.primary) + '15', borderColor: (domain.color || colors.primary) + '33', gap: 4 }]}>
+                  <Feather name={domain.icon as any} size={10} color={domain.color || colors.primary} />
+                  <Text style={[styles.linkedTaskText, { color: domain.color || colors.primary }]}>{domain.name}</Text>
+                </View>
+              )}
+              {activity && (
+                <View style={[styles.linkedTaskBadge, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <Text style={[styles.linkedTaskText, { color: colors.foreground }]}>{activity.name}</Text>
+                </View>
+              )}
+              {(!domain && Array.isArray(entry.tags) && entry.tags.length > 0) && entry.tags.map(t => (
                 <TagChip key={t} tagId={t} />
               ))}
             </View>

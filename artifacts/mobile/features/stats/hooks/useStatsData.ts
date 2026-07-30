@@ -34,11 +34,12 @@ export function useStatsData(entries: Entry[], dayStartHour: number) {
     const yesterdayWasted = getTimeWasted(yesterdayEntries);
     const wasteDelta = todayWasted - yesterdayWasted;
 
-    // Focus Mix Ring calculations
-    const allDeep = safeEntries.filter(e => e.focus === 'deep').length;
-    const allLight = safeEntries.filter(e => e.focus === 'light').length;
-    const allOff = safeEntries.filter(e => e.focus === 'off').length;
-    const allTotal = safeEntries.length;
+    // Focus Mix Ring — supports both new (normal/distracted) and legacy (light/off) entries
+    const allDeep       = safeEntries.filter(e => e.focus === 'deep').length;
+    const allNormal     = safeEntries.filter(e => e.focus === 'normal' || e.focus === 'light').length;
+    const allNeutral    = safeEntries.filter(e => e.focus === 'neutral').length;
+    const allDistracted = safeEntries.filter(e => e.focus === 'distracted' || e.focus === 'off').length;
+    const allTotal      = safeEntries.length;
 
     // Streak & Patterns
     const streak = getConsecutiveDayStreak(safeEntries, dayStartHour);
@@ -46,13 +47,13 @@ export function useStatsData(entries: Entry[], dayStartHour: number) {
     const maxDeepByHour = Math.max(...deepByHour, 1);
 
     const ringSegments = [
-      { value: allDeep, color: '#2D6A4F', label: 'Deep' },
-      { value: allLight, color: '#E8A838', label: 'Light' },
-      { value: allOff, color: '#9CA3AF', label: 'Off' },
-    ];
+      { value: allDeep,       color: '#52B788', label: 'Deep' },
+      { value: allNormal,     color: '#60A5FA', label: 'Normal' },
+      { value: allNeutral,    color: '#818CF8', label: 'Neutral' },
+      { value: allDistracted, color: '#F87171', label: 'Distracted' },
+    ].filter(s => s.value > 0); // only show segments that exist
 
     // Derived scalars used by the presentation layer.
-    // Computed here so StatsScreenV2 remains purely declarative.
     const deepRate = allTotal > 0 ? Math.round((allDeep / allTotal) * 100) : 0;
     const hasYesterdayData = yesterdayEntries.length > 0;
     const hasTodayData = todayEntries.length > 0;

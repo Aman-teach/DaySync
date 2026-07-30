@@ -9,6 +9,7 @@ import {
   TouchableWithoutFeedback,
   View,
   Platform,
+  Alert,
 } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
@@ -92,10 +93,20 @@ export function TagManagerModal({ visible, onClose }: Props) {
 
   const handleSave = async () => {
     if (!label.trim()) return;
+    const cleanLabel = label.trim();
+
+    const isDuplicate = tags.some(
+      t => t.label.toLowerCase() === cleanLabel.toLowerCase() && t.id !== editingTag?.id
+    );
+    if (isDuplicate) {
+      Alert.alert('Duplicate Tag', 'A tag with this name already exists.');
+      return;
+    }
+
     try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
     const tag: TagConfig = {
-      id: editingTag?.id ?? label.toLowerCase().replace(/\s+/g, '-') + '-' + Date.now(),
-      label: label.trim(),
+      id: editingTag?.id ?? cleanLabel.toLowerCase().replace(/\s+/g, '-') + '-' + Date.now(),
+      label: cleanLabel,
       icon: selectedIcon,
       color: selectedColor.color,
       bg: selectedColor.bg,

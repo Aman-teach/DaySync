@@ -31,13 +31,21 @@ export const StatsEntrySchema = z.object({
   text: z.string().catch(''),
   tags: z.array(z.string()).catch([]),
   
+  // Domain & Activity — pass through as-is, optional
+  domainId: z.string().optional(),
+  activityId: z.string().optional(),
+  duration: z.number().optional(),
+  isDeleted: z.boolean().optional(),
+  
   // Recoverable: Fallback to sensible defaults
-  focus: z.enum(['deep', 'light', 'off', 'neutral']).catch('deep'),
+  focus: z.enum(['deep', 'normal', 'distracted', 'neutral', 'light', 'off']).catch('deep'),
   energy: z.string().catch('high'),
   intervalMinutes: z.number().nonnegative().catch(30),
   dateKey: z.string().catch(''),
   taskId: z.string().optional(),
   taskTitle: z.string().optional(),
+  leverage: z.string().optional(),
+  imageUrl: z.string().optional(),
   
   // Unrecoverable if invalid: Time-series stats rely absolutely on createdAt.
   // We run it through a preprocessor to attempt safe repairs first.
@@ -65,7 +73,10 @@ export function validateStatsEntries(rawEntries: any[]): Entry[] {
   return rawEntries.reduce((acc, raw) => {
     const result = StatsEntrySchema.safeParse(raw);
     if (result.success) {
-      acc.push(result.data as Entry);
+      // Skip soft-deleted entries — they must never appear in stats
+      if (!result.data.isDeleted) {
+        acc.push(result.data as Entry);
+      }
     } else {
       // Log unrecoverable entries for diagnostics — traceable via statsLogger backend
       statsLogger.warn('validation', 'Unrecoverable entry discarded', {

@@ -7,7 +7,7 @@ export async function exportToCSV(entries: Entry[]): Promise<void> {
     const date = e.dateKey;
     const time = new Date(e.createdAt).toLocaleTimeString();
     const text = `"${e.text.replace(/"/g, '""')}"`;
-    const tags = `"${e.tags.join(', ')}"`;
+    const tags = `"${(e.tags || []).join(', ')}"`;
     return [e.id, date, time, text, tags, e.focus, e.energy, e.intervalMinutes].join(',');
   });
   const csv = header + rows.join('\n');

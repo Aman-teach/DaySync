@@ -1,6 +1,5 @@
 import { Platform } from 'react-native';
 import { Settings } from '@/types';
-import { getNextTargetTime } from '@/utils/time';
 import { getRandomPrompt } from '@/constants/notificationPrompts';
 
 type NotificationsModule = typeof import('expo-notifications');
@@ -40,62 +39,82 @@ export async function scheduleReminders(settings: Settings, latestEntryMs: numbe
 
   const now = new Date();
   
-  // 1. Morning Kickoff
-  const startOfDay = new Date(now);
+  // To avoid hitting the 64 notification limit on iOS, we calculate the next 60 valid target times.
+  let current = new Date(now);
+  const intervalMs = settings.interval * 60 * 1000;
+  
+  // Align current to the next valid interval boundary of the activeStart
+  let startOfDay = new Date(current);
   startOfDay.setHours(settings.activeStart, 0, 0, 0);
-  if (now.getTime() < startOfDay.getTime()) {
-    await N.scheduleNotificationAsync({
-      content: { title: 'DaySync', body: getRandomPrompt('kickoff'), data: { action: 'checkin' } },
-      trigger: { type: N.SchedulableTriggerInputTypes.DATE, date: startOfDay },
-    });
+  
+  if (current.getTime() < startOfDay.getTime()) {
+    current = new Date(startOfDay);
+  } else {
+    const elapsed = current.getTime() - startOfDay.getTime();
+    current.setTime(startOfDay.getTime() + Math.ceil(elapsed / intervalMs) * intervalMs);
+    if (current.getTime() === now.getTime()) {
+       current.setTime(current.getTime() + intervalMs);
+    }
   }
 
-  // 2. Continuous Dynamic Reminders
-  let currentTargetMs = getNextTargetTime(settings.interval, settings.activeStart, settings.activeEnd);
-  const endOfDay = new Date(now);
-  endOfDay.setHours(settings.activeEnd, 0, 0, 0);
-
-  let isFirst = true;
   let count = 0;
+  let isFirst = true;
 
-  // We need to advance currentTargetMs if it's based strictly on the schedule and we already missed some today.
-  // Wait, getNextTargetTime already calculates the NEXT future time strictly based on the schedule, so we don't need to advance it!
-  // BUT wait, what if the user JUST logged an entry?
-  // Since we reverted to the rigid system, we want to schedule the REST of the day's notifications starting from the NEXT rigid boundary.
-  
-  while (currentTargetMs < endOfDay.getTime() && count < 60) {
-    if (currentTargetMs > now.getTime()) {
-      // Main Check-in or Missed L2 if they've completely ignored it for cycles
-      const promptType = isFirst ? 'checkin' : 'missed_l2';
+  while (count < 60) {
+    const hour = current.getHours();
+    
+    // Check if we passed the end of the active window for this day
+    if (hour >= settings.activeEnd) {
+      // Jump to the next day's active start
+      current.setDate(current.getDate() + 1);
+      current.setHours(settings.activeStart, 0, 0, 0);
+      
+      // Schedule morning kickoff
       await N.scheduleNotificationAsync({
-        content: { title: 'DaySync', body: getRandomPrompt(promptType), data: { action: 'checkin' } },
-        trigger: { type: N.SchedulableTriggerInputTypes.DATE, date: new Date(currentTargetMs) },
+        content: { title: 'DaySync', body: getRandomPrompt('kickoff'), data: { action: 'checkin' } },
+        trigger: { type: N.SchedulableTriggerInputTypes.DATE, date: new Date(current) },
       });
-
-      // Schedule a Missed L1 guilt-trip 15 minutes after the VERY FIRST missed target
-      if (isFirst) {
-        const missedL1Ms = currentTargetMs + (15 * 60 * 1000);
-        if (missedL1Ms < endOfDay.getTime() && missedL1Ms < currentTargetMs + (settings.interval * 60 * 1000)) {
-          await N.scheduleNotificationAsync({
-            content: { title: 'DaySync', body: getRandomPrompt('missed_l1'), data: { action: 'checkin' } },
-            trigger: { type: N.SchedulableTriggerInputTypes.DATE, date: new Date(missedL1Ms) },
-          });
-        }
-      }
+      count++;
+      
+      // Schedule end of day wrap-up for the new day
+      const wrapUp = new Date(current);
+      wrapUp.setHours(settings.activeEnd, 0, 0, 0);
+      await N.scheduleNotificationAsync({
+        content: { title: 'DaySync', body: getRandomPrompt('wrapup'), data: { action: 'wrapup' } },
+        trigger: { type: N.SchedulableTriggerInputTypes.DATE, date: wrapUp },
+      });
+      count++;
+      continue;
     }
     
-    // Advance to the next interval boundary
-    currentTargetMs += (settings.interval * 60 * 1000);
-    isFirst = false;
-    count++;
-  }
+    // Check if we are before the active start (should only happen on day 1 if run early)
+    if (hour < settings.activeStart) {
+      current.setHours(settings.activeStart, 0, 0, 0);
+      continue;
+    }
 
-  // 3. End of Day Wrap-up
-  if (now.getTime() < endOfDay.getTime()) {
+    // Schedule the check-in
+    const promptType = isFirst ? 'checkin' : 'missed_l2';
     await N.scheduleNotificationAsync({
-      content: { title: 'DaySync', body: getRandomPrompt('wrapup'), data: { action: 'wrapup' } },
-      trigger: { type: N.SchedulableTriggerInputTypes.DATE, date: endOfDay },
+      content: { title: 'DaySync', body: getRandomPrompt(promptType), data: { action: 'checkin' } },
+      trigger: { type: N.SchedulableTriggerInputTypes.DATE, date: new Date(current) },
     });
+    count++;
+
+    // Schedule Missed L1 guilt-trip 15 minutes after the first ignored one
+    if (isFirst) {
+      const missedL1 = new Date(current.getTime() + 15 * 60 * 1000);
+      if (missedL1.getHours() < settings.activeEnd && missedL1.getTime() < current.getTime() + intervalMs) {
+        await N.scheduleNotificationAsync({
+          content: { title: 'DaySync', body: getRandomPrompt('missed_l1'), data: { action: 'checkin' } },
+          trigger: { type: N.SchedulableTriggerInputTypes.DATE, date: missedL1 },
+        });
+        count++;
+      }
+    }
+
+    isFirst = false;
+    current.setTime(current.getTime() + intervalMs);
   }
 }
 
@@ -104,3 +123,4 @@ export async function cancelAllReminders(): Promise<void> {
   if (!N) return;
   await N.cancelAllScheduledNotificationsAsync();
 }
+

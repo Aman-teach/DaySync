@@ -31,12 +31,14 @@ export default function EditEntryScreen() {
   const colors = useColors();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { entries, updateEntry, removeEntry, tags, tasks } = useApp();
+  const { entries, updateEntry, removeEntry, tags, tasks, domains, activities } = useApp();
 
   const entry = entries.find(e => e.id === id);
 
   const [text, setText] = useState(entry?.text ?? '');
   const [selectedTags, setSelectedTags] = useState<string[]>(entry?.tags ?? []);
+  const [domainId, setDomainId] = useState<string | undefined>(entry?.domainId);
+  const [activityId, setActivityId] = useState<string | undefined>(entry?.activityId);
   const [focus, setFocus] = useState<FocusLevel>(entry?.focus ?? 'deep');
   const [energy, setEnergy] = useState<EnergyLevel>(entry?.energy ?? 'high');
   const [leverage, setLeverage] = useState<'high' | 'busywork' | undefined>(entry?.leverage);
@@ -66,8 +68,8 @@ export default function EditEntryScreen() {
   };
 
   const handleSave = async () => {
-    if (selectedTags.length === 0) {
-      Alert.alert('Select a tag', 'Please choose at least one tag.');
+    if (selectedTags.length === 0 && !domainId && !activityId) {
+      Alert.alert('Select a category', 'Please choose at least one tag, domain, or activity.');
       return;
     }
     setSaving(true);
@@ -84,7 +86,20 @@ export default function EditEntryScreen() {
       }
     }
 
-    await updateEntry(id!, { text: text.trim(), tags: selectedTags, focus, energy, leverage, intervalMinutes: customDuration, taskId, taskTitle, imageUrl: finalImageUrl });
+    await updateEntry(id!, {
+      text: text.trim(),
+      tags: selectedTags,
+      domainId,
+      activityId,
+      focus,
+      energy,
+      leverage,
+      intervalMinutes: customDuration,
+      duration: customDuration,
+      taskId,
+      taskTitle,
+      imageUrl: finalImageUrl
+    });
     router.back();
   };
 
@@ -203,8 +218,75 @@ export default function EditEntryScreen() {
           )}
         </Pressable>
 
+        {/* Domain Selection */}
+        {domains && domains.length > 0 && (
+          <View style={styles.fieldGroup}>
+            <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>DOMAIN</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              {domains.map(d => {
+                const selected = domainId === d.id;
+                return (
+                  <TouchableOpacity
+                    key={d.id}
+                    style={[
+                      styles.chipBtn,
+                      selected
+                        ? { backgroundColor: d.color + '22', borderColor: d.color }
+                        : { backgroundColor: colors.card, borderColor: colors.border }
+                    ]}
+                    onPress={() => {
+                      if (domainId === d.id) {
+                        setDomainId(undefined);
+                        setActivityId(undefined);
+                      } else {
+                        setDomainId(d.id);
+                        setActivityId(undefined);
+                      }
+                    }}
+                  >
+                    <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: d.color }} />
+                    <Feather name={(d.icon || 'folder') as any} size={13} color={selected ? d.color : colors.mutedForeground} />
+                    <Text style={[styles.chipText, { color: selected ? d.color : colors.foreground }]}>{d.name}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
+
+        {/* Activity Selection */}
+        {domainId && activities && (
+          <View style={styles.fieldGroup}>
+            <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>ACTIVITY</Text>
+            <View style={styles.tagGrid}>
+              {activities
+                .filter(a => a.domainId === domainId)
+                .sort((a, b) => a.position - b.position)
+                .map(a => {
+                  const selected = activityId === a.id;
+                  const domain = domains.find(d => d.id === domainId);
+                  return (
+                    <TouchableOpacity
+                      key={a.id}
+                      style={[
+                        styles.chipBtn,
+                        selected
+                          ? { backgroundColor: (domain?.color || colors.primary) + '22', borderColor: domain?.color || colors.primary }
+                          : { backgroundColor: colors.card, borderColor: colors.border }
+                      ]}
+                      onPress={() => setActivityId(activityId === a.id ? undefined : a.id)}
+                    >
+                      <Feather name={(a.icon || 'zap') as any} size={13} color={selected ? (domain?.color || colors.primary) : colors.mutedForeground} />
+                      <Text style={[styles.chipText, { color: selected ? (domain?.color || colors.primary) : colors.foreground }]}>{a.name}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+            </View>
+          </View>
+        )}
+
         <View style={styles.fieldGroup}>
-          <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>TAG</Text>
+          <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>TAG (OPTIONAL)</Text>
           <View style={styles.tagGrid}>
             {tags.map(tag => (
               <TagChip
@@ -411,6 +493,8 @@ const styles = StyleSheet.create({
   fieldGroup: { gap: 10 },
   fieldLabel: { fontSize: 11, fontFamily: 'Inter_600SemiBold', letterSpacing: 1 },
   tagGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  chipBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 100, borderWidth: 1 },
+  chipText: { fontSize: 13, fontFamily: 'Inter_500Medium' },
   pickerCard: { borderRadius: 16, borderWidth: 1, padding: 16 },
   saveBtn: { paddingVertical: 16, borderRadius: 100, alignItems: 'center' },
   saveBtnText: { fontSize: 16, fontFamily: 'Inter_700Bold', color: '#fff' },

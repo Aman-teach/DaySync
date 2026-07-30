@@ -15,6 +15,7 @@ interface Props {
   strokeWidth?: number;
   centerLabel?: string;
   centerSub?: string;
+  centerColor?: string;
 }
 
 export function StatsRing({
@@ -23,6 +24,7 @@ export function StatsRing({
   strokeWidth = 18,
   centerLabel,
   centerSub,
+  centerColor,
 }: Props) {
   const colors = useColors();
   const radius = (size - strokeWidth) / 2;
@@ -76,7 +78,7 @@ export function StatsRing({
       {(centerLabel || centerSub) && (
         <View style={[styles.center, { width: size, height: size }]}>
           {centerLabel && (
-            <Text style={[styles.centerLabel, { color: colors.foreground }]}>
+            <Text style={[styles.centerLabel, { color: centerColor ?? colors.foreground }]}>
               {centerLabel}
             </Text>
           )}

@@ -87,6 +87,55 @@ export default function TodayScreen() {
     return getDeltaScore(todayEntries, yesterdayEntries);
   }, [entries, todayEntries, settings.dayStartHour]);
 
+  // Dynamic, personality-driven motivation message
+  const motivationMessage = React.useMemo(() => {
+    const h = currentTime.getHours();
+    const lastEntry = todayEntries.length > 0 ? todayEntries[todayEntries.length - 1] : null;
+    const lastFocus = lastEntry?.focus;
+    const entryCount = todayEntries.length;
+
+    // First thing in the morning, no logs yet
+    if (entryCount === 0) {
+      if (h >= 5 && h < 9)
+        return { icon: 'sunrise', text: "Morning. Blank slate. What's the first thing worth tracking today?", color: '#F59E0B' };
+      if (h >= 9 && h < 12)
+        return { icon: 'coffee', text: "Still no entries. The day's burning — log something now.", color: '#EF4444' };
+      if (h >= 12 && h < 17)
+        return { icon: 'clock', text: "Half the day's gone and the log is empty. Start now, no matter how small.", color: '#EF4444' };
+      if (h >= 17)
+        return { icon: 'moon', text: "Evening. If you did anything useful today, it's not too late to capture it.", color: '#8B5CF6' };
+    }
+
+    // Score-based with personality
+    if (focusScore >= 90)
+      return { icon: 'zap', text: "On fire. This is one of those days you'll look back on.", color: '#10B981' };
+
+    if (focusScore >= 70) {
+      if (deltaScore !== null && deltaScore > 0)
+        return { icon: 'trending-up', text: `Up ${deltaScore} pts from yesterday. Momentum is compounding.`, color: '#10B981' };
+      return { icon: 'shield', text: "Solid day. Deep focus is your best asset — protect it.", color: '#10B981' };
+    }
+
+    if (focusScore >= 40) {
+      if (lastFocus === 'distracted')
+        return { icon: 'alert-triangle', text: "Last block was distracted. Happens. Reset and go again.", color: '#F59E0B' };
+      if (lastFocus === 'deep')
+        return { icon: 'zap', text: "You're in it. Don't stop here — one more deep block.", color: '#3B82F6' };
+      return { icon: 'activity', text: `${entryCount} blocks logged. The second half of the day matters too.`, color: '#6366F1' };
+    }
+
+    if (focusScore > 0) {
+      if (deltaScore !== null && deltaScore < 0)
+        return { icon: 'trending-down', text: `Score is down ${Math.abs(deltaScore)} from yesterday. Time to course-correct.`, color: '#EF4444' };
+      if (entryCount >= 3)
+        return { icon: 'target', text: "Logged, but focus quality is low. Quality beats quantity — go deep.", color: '#F59E0B' };
+      return { icon: 'play', text: "You've started. Now lock in — a focused hour beats a scattered three.", color: '#3B82F6' };
+    }
+
+    // Negative score
+    return { icon: 'refresh-cw', text: "Today's been rough. One deep block can still flip the day. Go.", color: '#EF4444' };
+  }, [focusScore, todayEntries, deltaScore, currentTime]);
+
   const onRefresh = async () => {
     setRefreshing(true);
     await reload();
@@ -181,14 +230,10 @@ export default function TodayScreen() {
             </View>
           </View>
           
-          <View style={[styles.motivationFooter, { backgroundColor: colors.primary + '10' }]}>
-            <Feather name="zap" size={14} color={colors.primary} />
-            <Text style={[styles.motivationText, { color: colors.primary }]}>
-              {focusScore > 75 
-                ? "You're absolutely in the zone today. Keep that momentum going!" 
-                : focusScore > 40 
-                  ? "Building solid momentum. Let's lock in for another deep session." 
-                  : "Every big day starts with a single step. Ready to focus?"}
+          <View style={[styles.motivationFooter, { backgroundColor: motivationMessage.color + '12', borderTopColor: motivationMessage.color + '28', borderTopWidth: 1 }]}>
+            <Feather name={motivationMessage.icon as any} size={14} color={motivationMessage.color} />
+            <Text style={[styles.motivationText, { color: motivationMessage.color }]}>
+              {motivationMessage.text}
             </Text>
           </View>
         </View>
@@ -245,14 +290,18 @@ export default function TodayScreen() {
             </View>
             {todaySummary ? (
               <View style={[styles.wrapCard, { backgroundColor: colors.card, borderColor: colors.primary + '33' }]}>
+                {/* Summary */}
                 <Text style={[styles.wrapSummary, { color: colors.foreground }]}>
                   {todaySummary.summary}
                 </Text>
-                
-                {/* Highlights */}
+
+                {/* Wins */}
                 {todaySummary.highlights && todaySummary.highlights.length > 0 && (
                   <View style={styles.wrapSection}>
-                    <Text style={[styles.wrapSectionLabel, { color: colors.mutedForeground }]}>TODAY'S WINS</Text>
+                    <View style={styles.sectionLabelRow}>
+                      <Feather name="check-circle" size={12} color="#52B788" />
+                      <Text style={[styles.wrapSectionLabel, { color: '#52B788' }]}>WHAT WENT WELL</Text>
+                    </View>
                     {todaySummary.highlights.map((h, i) => (
                       <View key={i} style={styles.highlight}>
                         <Feather name="check" size={14} color="#52B788" style={styles.highlightIcon} />
@@ -262,35 +311,50 @@ export default function TodayScreen() {
                   </View>
                 )}
 
-                {/* Anomalies */}
+                {/* Problems */}
                 {todaySummary.anomalies && todaySummary.anomalies.length > 0 && (
                   <View style={styles.wrapSection}>
-                    <Text style={[styles.wrapSectionLabel, { color: colors.mutedForeground }]}>DISTRACTIONS & LEAKS</Text>
+                    <View style={styles.sectionLabelRow}>
+                      <Feather name="alert-triangle" size={12} color="#EF4444" />
+                      <Text style={[styles.wrapSectionLabel, { color: '#EF4444' }]}>WHERE YOU SLIPPED</Text>
+                    </View>
                     {todaySummary.anomalies.map((a, i) => (
-                       <View key={i} style={styles.highlight}>
-                         <Feather name="alert-circle" size={14} color="#EF4444" style={styles.highlightIcon} />
-                         <Text style={[styles.highlightText, { color: colors.foreground }]}>{a}</Text>
-                       </View>
+                      <View key={i} style={styles.highlight}>
+                        <Feather name="minus" size={14} color="#EF4444" style={styles.highlightIcon} />
+                        <Text style={[styles.highlightText, { color: colors.foreground }]}>{a}</Text>
+                      </View>
                     ))}
                   </View>
                 )}
 
-                {/* Guide Advice */}
-                {todaySummary.guideAdvice ? (
-                  <View style={[styles.adviceCard, { backgroundColor: colors.primary + '11', borderColor: colors.primary + '33' }]}>
+                {/* Tomorrow Navigator */}
+                {(todaySummary.guideAdvice || (todaySummary.tomorrowPlan && todaySummary.tomorrowPlan.length > 0)) && (
+                  <View style={[styles.adviceCard, { backgroundColor: colors.primary + '0d', borderColor: colors.primary + '33' }]}>
                     <View style={styles.adviceHeader}>
-                      <Feather name="compass" size={13} color={colors.primary} />
-                      <Text style={[styles.adviceTitle, { color: colors.primary }]}>TOMORROW'S NAVIGATOR</Text>
+                      <Feather name="sunrise" size={13} color={colors.primary} />
+                      <Text style={[styles.adviceTitle, { color: colors.primary }]}>TOMORROW'S PLAN</Text>
                     </View>
-                    <Text style={[styles.adviceText, { color: colors.foreground }]}>
-                      {todaySummary.guideAdvice}
-                    </Text>
+                    {todaySummary.guideAdvice ? (
+                      <Text style={[styles.adviceText, { color: colors.foreground }]}>
+                        {todaySummary.guideAdvice}
+                      </Text>
+                    ) : null}
+                    {todaySummary.tomorrowPlan && todaySummary.tomorrowPlan.length > 0 && (
+                      <View style={{ marginTop: todaySummary.guideAdvice ? 10 : 0, gap: 6 }}>
+                        {todaySummary.tomorrowPlan.map((item, i) => (
+                          <View key={i} style={styles.planRow}>
+                            <View style={[styles.planBullet, { backgroundColor: colors.primary }]} />
+                            <Text style={[styles.highlightText, { color: colors.foreground }]}>{item}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
                   </View>
-                ) : null}
+                )}
 
                 {todaySummary.mood ? (
                   <Text style={[styles.mood, { color: colors.mutedForeground, marginTop: 4 }]}>
-                    ⚡ {todaySummary.mood}
+                    {todaySummary.mood}
                   </Text>
                 ) : null}
 
@@ -299,6 +363,7 @@ export default function TodayScreen() {
                   onPress={handleGenerateWrap}
                   disabled={generating}
                 >
+                  <Feather name="refresh-cw" size={12} color={colors.mutedForeground} />
                   <Text style={[styles.regenText, { color: colors.mutedForeground }]}>
                     {generating ? 'Regenerating...' : 'Regenerate'}
                   </Text>
@@ -468,10 +533,13 @@ const styles = StyleSheet.create({
   },
   wrapSummary: { fontSize: 15, fontFamily: 'Inter_500Medium', lineHeight: 23, marginBottom: 4 },
   wrapSection: { gap: 6, marginTop: 8 },
-  wrapSectionLabel: { fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 1.1, textTransform: 'uppercase', opacity: 0.8 },
+  wrapSectionLabel: { fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 1.1, textTransform: 'uppercase', opacity: 0.9 },
+  sectionLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 2 },
   highlight: { flexDirection: 'row', gap: 6, alignItems: 'center' },
   highlightIcon: { marginTop: 1 },
   highlightText: { flex: 1, fontSize: 13, fontFamily: 'Inter_400Regular', lineHeight: 18 },
+  planRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  planBullet: { width: 5, height: 5, borderRadius: 3, marginTop: 7 },
   adviceCard: {
     borderRadius: 12,
     borderWidth: 1,
@@ -482,7 +550,7 @@ const styles = StyleSheet.create({
   adviceHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   adviceTitle: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 0.8 },
   adviceText: { fontSize: 13, fontFamily: 'Inter_500Medium', lineHeight: 19 },
-  mood: { fontSize: 12, fontFamily: 'Inter_400Regular', fontStyle: 'italic' },
+  mood: { fontSize: 13, fontFamily: 'Inter_400Regular', lineHeight: 18 },
   regenBtn: {
     alignSelf: 'flex-end',
     borderWidth: 1,

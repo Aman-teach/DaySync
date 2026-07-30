@@ -1,11 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Entry, DaySummary, Settings } from '@/types';
+import { Entry, DaySummary, Settings, Domain, Activity } from '@/types';
 
 const KEYS = {
   ENTRIES: 'atlas_entries',
   SETTINGS: 'atlas_settings',
   DAY_SUMMARIES: 'atlas_day_summaries',
   CUSTOM_TAGS: 'atlas_custom_tags',
+  DOMAINS: 'atlas_domains',
+  ACTIVITIES: 'atlas_activities',
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -34,10 +36,15 @@ export async function saveEntry(entry: Entry): Promise<void> {
 
 export async function deleteEntry(id: string): Promise<void> {
   const entries = await getAllEntries();
-  await AsyncStorage.setItem(
-    KEYS.ENTRIES,
-    JSON.stringify(entries.filter(e => e.id !== id))
-  );
+  const idx = entries.findIndex(e => e.id === id);
+  if (idx >= 0) {
+    entries[idx] = {
+      ...entries[idx],
+      isDeleted: true,
+      updatedAt: new Date().toISOString(),
+    };
+    await AsyncStorage.setItem(KEYS.ENTRIES, JSON.stringify(entries));
+  }
 }
 
 export async function getSettings(): Promise<Settings> {
@@ -74,12 +81,57 @@ export async function saveCustomTags(tags: any[]): Promise<void> {
   await AsyncStorage.setItem(KEYS.CUSTOM_TAGS, JSON.stringify(tags));
 }
 
+// ── Domains & Activities ───────────────────────────────────────────────────
+
+export const DEFAULT_DOMAINS: Domain[] = [
+  { id: 'd-business', name: 'Business', icon: 'briefcase', color: '#3B82F6', position: 0 },
+  { id: 'd-learning', name: 'Learning', icon: 'book-open', color: '#8B5CF6', position: 1 },
+  { id: 'd-personal', name: 'Personal', icon: 'user', color: '#10B981', position: 2 },
+  { id: 'd-life', name: 'Life', icon: 'home', color: '#F59E0B', position: 3 },
+];
+
+export const DEFAULT_ACTIVITIES: Activity[] = [
+  { id: 'a-b1', domainId: 'd-business', name: 'Video Editing', icon: 'video', position: 0 },
+  { id: 'a-b2', domainId: 'd-business', name: 'Coding', icon: 'code', position: 1 },
+  { id: 'a-b3', domainId: 'd-business', name: 'Sales', icon: 'dollar-sign', position: 2 },
+  { id: 'a-b4', domainId: 'd-business', name: 'Marketing', icon: 'trending-up', position: 3 },
+  { id: 'a-b5', domainId: 'd-business', name: 'Meetings', icon: 'users', position: 4 },
+  { id: 'a-l1', domainId: 'd-learning', name: 'Reading', icon: 'book', position: 0 },
+  { id: 'a-l2', domainId: 'd-learning', name: 'Practice', icon: 'pen-tool', position: 1 },
+  { id: 'a-l3', domainId: 'd-learning', name: 'Course', icon: 'monitor', position: 2 },
+  { id: 'a-p1', domainId: 'd-personal', name: 'Exercise', icon: 'activity', position: 0 },
+  { id: 'a-p2', domainId: 'd-personal', name: 'Meditation', icon: 'wind', position: 1 },
+  { id: 'a-life1', domainId: 'd-life', name: 'Meal', icon: 'coffee', position: 0 },
+  { id: 'a-life2', domainId: 'd-life', name: 'Sleep', icon: 'moon', position: 1 },
+  { id: 'a-life3', domainId: 'd-life', name: 'Commute', icon: 'navigation', position: 2 },
+];
+
+export async function getDomains(): Promise<Domain[]> {
+  const raw = await AsyncStorage.getItem(KEYS.DOMAINS);
+  return raw ? JSON.parse(raw) : DEFAULT_DOMAINS;
+}
+
+export async function saveDomains(domains: Domain[]): Promise<void> {
+  await AsyncStorage.setItem(KEYS.DOMAINS, JSON.stringify(domains));
+}
+
+export async function getActivities(): Promise<Activity[]> {
+  const raw = await AsyncStorage.getItem(KEYS.ACTIVITIES);
+  return raw ? JSON.parse(raw) : DEFAULT_ACTIVITIES;
+}
+
+export async function saveActivities(activities: Activity[]): Promise<void> {
+  await AsyncStorage.setItem(KEYS.ACTIVITIES, JSON.stringify(activities));
+}
+
 // ── Check-in Draft (survives app kill by OS on low-RAM devices) ───────────────
 const DRAFT_KEY = 'atlas_checkin_draft';
 
 export interface CheckinDraft {
   text: string;
-  selectedTags: string[];
+  selectedTags?: string[];
+  domainId?: string;
+  activityId?: string;
   focus: string;
   energy: string;
   leverage?: 'high' | 'busywork';

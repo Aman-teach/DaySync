@@ -3,7 +3,7 @@ import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
+  FlatList,
   Platform,
   TouchableOpacity,
 } from 'react-native';
@@ -13,7 +13,7 @@ import { useColors } from '@/hooks/useColors';
 import { useApp } from '@/context/AppContext';
 import { EntryCard } from '@/components/EntryCard';
 import { Feather } from '@expo/vector-icons';
-import { getFocusScore } from '@/utils/helpers';
+import { getFocusScore, parseDateKeySafely } from '@/utils/helpers';
 
 export default function HistoryDetailScreen() {
   const { date } = useLocalSearchParams<{ date: string }>();
@@ -28,9 +28,7 @@ export default function HistoryDetailScreen() {
 
   // Parse date for display
   const dateObj = useMemo(() => {
-    if (!date) return new Date();
-    const [yyyy, mm, dd] = date.split('-');
-    return new Date(parseInt(yyyy), parseInt(mm) - 1, parseInt(dd));
+    return parseDateKeySafely(date as string);
   }, [date]);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
@@ -42,123 +40,127 @@ export default function HistoryDetailScreen() {
           <Feather name="arrow-left" size={24} color={colors.foreground} />
         </TouchableOpacity>
         <Text style={[styles.navTitle, { color: colors.foreground }]}>
-          {dateObj.toLocaleDateString(undefined, {
+          {dateObj ? dateObj.toLocaleDateString(undefined, {
             weekday: 'long',
             month: 'long',
             day: 'numeric'
-          })}
+          }) : `Invalid Date (${date})`}
         </Text>
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView
+      <FlatList
+        data={dayEntries}
+        keyExtractor={(item) => item.id}
         contentContainerStyle={[
           styles.scroll,
           { paddingBottom: Platform.OS === 'web' ? 34 + 84 : insets.bottom + 100 },
         ]}
         showsVerticalScrollIndicator={false}
-      >
-        <View style={[styles.statsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.scoreBlock}>
-            <Text style={[styles.scoreNum, { color: colors.primary }]}>{focusScore}</Text>
-            <Text style={[styles.scoreLabel, { color: colors.mutedForeground }]}>Focus Score</Text>
-          </View>
-          <View style={[styles.divider, { backgroundColor: colors.border }]} />
-          <View style={styles.scoreBlock}>
-            <Text style={[styles.scoreNum, { color: colors.foreground }]}>{dayEntries.length}</Text>
-            <Text style={[styles.scoreLabel, { color: colors.mutedForeground }]}>Entries Logged</Text>
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
-              Timeline
-            </Text>
-          </View>
-          
-          {dayEntries.length === 0 ? (
-            <Text style={[styles.emptyWrapText, { color: colors.mutedForeground }]}>
-              No entries found.
-            </Text>
-          ) : (
-            <View style={styles.timeline}>
-              {dayEntries.map(entry => (
-                <EntryCard key={entry.id} entry={entry} />
-              ))}
-            </View>
-          )}
-        </View>
-
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
-              Day Wrap
-            </Text>
-          </View>
-          {summary ? (
-            <View style={[styles.wrapCard, { backgroundColor: colors.card, borderColor: colors.primary + '33' }]}>
-              <Text style={[styles.wrapSummary, { color: colors.foreground }]}>
-                {summary.summary}
-              </Text>
-
-              <View style={styles.wrapGrid}>
-                {/* Wins */}
-                <View style={styles.wrapCol}>
-                  <Text style={[styles.wrapSubTitle, { color: colors.mutedForeground }]}>
-                    TODAY'S WINS
-                  </Text>
-                  {summary.highlights?.map((h, i) => (
-                    <View key={i} style={styles.listItem}>
-                      <Feather name="check" size={14} color="#10B981" />
-                      <Text style={[styles.listText, { color: colors.foreground }]}>{h}</Text>
-                    </View>
-                  ))}
-                </View>
-
-                {/* Distractions */}
-                <View style={styles.wrapCol}>
-                  <Text style={[styles.wrapSubTitle, { color: colors.mutedForeground }]}>
-                    DISTRACTIONS & LEAKS
-                  </Text>
-                  {summary.anomalies?.map((a, i) => (
-                    <View key={i} style={styles.listItem}>
-                      <Feather name="alert-circle" size={14} color="#EF4444" />
-                      <Text style={[styles.listText, { color: colors.foreground }]}>{a}</Text>
-                    </View>
-                  ))}
-                </View>
+        initialNumToRender={10}
+        windowSize={5}
+        maxToRenderPerBatch={5}
+        removeClippedSubviews={Platform.OS === 'android'}
+        ListHeaderComponent={
+          <>
+            <View style={[styles.statsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={styles.scoreBlock}>
+                <Text style={[styles.scoreNum, { color: colors.primary }]}>{focusScore}</Text>
+                <Text style={[styles.scoreLabel, { color: colors.mutedForeground }]}>Focus Score</Text>
               </View>
-
-              {/* Advice */}
-              <View style={[styles.adviceBox, { backgroundColor: colors.background, borderColor: '#10B98133' }]}>
-                <View style={styles.adviceHeader}>
-                  <Feather name="target" size={14} color="#10B981" />
-                  <Text style={[styles.adviceTitle, { color: '#10B981' }]}>TOMORROW'S NAVIGATOR</Text>
-                </View>
-                <Text style={[styles.adviceText, { color: colors.foreground }]}>{summary.guideAdvice}</Text>
+              <View style={[styles.divider, { backgroundColor: colors.border }]} />
+              <View style={styles.scoreBlock}>
+                <Text style={[styles.scoreNum, { color: colors.foreground }]}>{dayEntries.length}</Text>
+                <Text style={[styles.scoreLabel, { color: colors.mutedForeground }]}>Entries Logged</Text>
               </View>
-
-              {/* Mood */}
-              {summary.mood && (
-                <View style={styles.moodBox}>
-                  <Feather name="zap" size={12} color="#F59E0B" />
-                  <Text style={[styles.moodText, { color: colors.mutedForeground }]}>
-                    {summary.mood}
-                  </Text>
-                </View>
-              )}
             </View>
-          ) : (
-            <View style={[styles.emptyWrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Feather name="wind" size={24} color={colors.mutedForeground} />
-              <Text style={[styles.emptyWrapText, { color: colors.mutedForeground }]}>
-                No Day Wrap generated for this date.
+
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
+                Timeline
               </Text>
             </View>
-          )}
-        </View>
-      </ScrollView>
+          </>
+        }
+        ListEmptyComponent={
+          <Text style={[styles.emptyWrapText, { color: colors.mutedForeground }]}>
+            No entries found.
+          </Text>
+        }
+        renderItem={({ item }) => (
+          <EntryCard entry={item} />
+        )}
+        ListFooterComponent={
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
+                Day Wrap
+              </Text>
+            </View>
+            {summary ? (
+              <View style={[styles.wrapCard, { backgroundColor: colors.card, borderColor: colors.primary + '33' }]}>
+                <Text style={[styles.wrapSummary, { color: colors.foreground }]}>
+                  {summary.summary}
+                </Text>
+
+                <View style={styles.wrapGrid}>
+                  {/* Wins */}
+                  <View style={styles.wrapCol}>
+                    <Text style={[styles.wrapSubTitle, { color: colors.mutedForeground }]}>
+                      TODAY'S WINS
+                    </Text>
+                    {summary.highlights?.map((h, i) => (
+                      <View key={i} style={styles.listItem}>
+                        <Feather name="check" size={14} color="#10B981" />
+                        <Text style={[styles.listText, { color: colors.foreground }]}>{h}</Text>
+                      </View>
+                    ))}
+                  </View>
+
+                  {/* Distractions */}
+                  <View style={styles.wrapCol}>
+                    <Text style={[styles.wrapSubTitle, { color: colors.mutedForeground }]}>
+                      DISTRACTIONS & LEAKS
+                    </Text>
+                    {summary.anomalies?.map((a, i) => (
+                      <View key={i} style={styles.listItem}>
+                        <Feather name="alert-circle" size={14} color="#EF4444" />
+                        <Text style={[styles.listText, { color: colors.foreground }]}>{a}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+
+                {/* Advice */}
+                <View style={[styles.adviceBox, { backgroundColor: colors.background, borderColor: '#10B98133' }]}>
+                  <View style={styles.adviceHeader}>
+                    <Feather name="target" size={14} color="#10B981" />
+                    <Text style={[styles.adviceTitle, { color: '#10B981' }]}>TOMORROW'S NAVIGATOR</Text>
+                  </View>
+                  <Text style={[styles.adviceText, { color: colors.foreground }]}>{summary.guideAdvice}</Text>
+                </View>
+
+                {/* Mood */}
+                {summary.mood && (
+                  <View style={styles.moodBox}>
+                    <Feather name="zap" size={12} color="#F59E0B" />
+                    <Text style={[styles.moodText, { color: colors.mutedForeground }]}>
+                      {summary.mood}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            ) : (
+              <View style={[styles.emptyWrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Feather name="wind" size={24} color={colors.mutedForeground} />
+                <Text style={[styles.emptyWrapText, { color: colors.mutedForeground }]}>
+                  No Day Wrap generated for this date.
+                </Text>
+              </View>
+            )}
+          </View>
+        }
+      />
     </View>
   );
 }

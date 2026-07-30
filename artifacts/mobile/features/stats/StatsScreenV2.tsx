@@ -30,8 +30,9 @@ import { SectionFallback } from './components/SectionFallback';
 import { OverviewHeader } from './components/OverviewHeader';
 import { FocusMixSection } from './components/FocusMixSection';
 import { DeepWorkHistogram } from './components/DeepWorkHistogram';
-import { TagAnalyticsSection } from './components/TagAnalyticsSection';
 import { TaskAnalyticsSection } from './components/TaskAnalyticsSection';
+import { DomainAnalyticsSection } from './components/DomainAnalyticsSection';
+import { ActivityAnalyticsSection } from './components/ActivityAnalyticsSection';
 import { HeatmapSection } from './components/HeatmapSection';
 import { InsightsCard } from './components/InsightsCard';
 
@@ -79,7 +80,7 @@ export default function StatsScreenV2() {
   // AppContext guarantees entries is always Entry[] (never undefined).
   // During the initial hydration pass it will be an empty array, which the
   // empty-state guard below handles safely.
-  const { entries: rawEntries, settings } = useApp();
+  const { entries: rawEntries, settings, domains } = useApp();
 
   // ── 2. Validation boundary ───────────────────────────────────────────────
   // validateStatsEntries strips every corrupt/unrecoverable entry exactly
@@ -113,11 +114,12 @@ export default function StatsScreenV2() {
   const heatmapData = useHeatmapData(entries, settings.dayStartHour);
 
   const {
-    tagTimeframe, setTagTimeframe, tagMinutes, maxTagMin,
     taskTimeframe, setTaskTimeframe, taskBreakdown, maxTaskMin,
+    domainTimeframe, setDomainTimeframe, domainMinutes, maxDomainMin,
+    activityTimeframe, setActivityTimeframe, activityMinutes, maxActivityMin,
   } = useTimeframeData(entries, todayEntries, yesterdayEntries);
 
-  const insights = useInsights(entries, allTotal, allDeep, streak);
+  const insights = useInsights(entries, allTotal, allDeep, streak, domains);
 
   // ── 4. Layout constants ──────────────────────────────────────────────────
   // These are platform offsets for safe-area, not business logic.
@@ -175,6 +177,24 @@ export default function StatsScreenV2() {
           />
         </SectionBoundary>
 
+        <SectionBoundary sectionName="DomainAnalyticsSection">
+          <DomainAnalyticsSection
+            data={domainMinutes}
+            maxMinutes={maxDomainMin}
+            selectedTimeframe={domainTimeframe}
+            onTimeframeChange={setDomainTimeframe}
+          />
+        </SectionBoundary>
+
+        <SectionBoundary sectionName="ActivityAnalyticsSection">
+          <ActivityAnalyticsSection
+            data={activityMinutes}
+            maxMinutes={maxActivityMin}
+            selectedTimeframe={activityTimeframe}
+            onTimeframeChange={setActivityTimeframe}
+          />
+        </SectionBoundary>
+
         <SectionBoundary sectionName="TaskAnalyticsSection">
           <TaskAnalyticsSection
             data={taskBreakdown}
@@ -184,17 +204,8 @@ export default function StatsScreenV2() {
           />
         </SectionBoundary>
 
-        <SectionBoundary sectionName="TagAnalyticsSection">
-          <TagAnalyticsSection
-            data={tagMinutes}
-            maxMinutes={maxTagMin}
-            selectedTimeframe={tagTimeframe}
-            onTimeframeChange={setTagTimeframe}
-          />
-        </SectionBoundary>
-
         <SectionBoundary sectionName="HeatmapSection">
-          <HeatmapSection heatmapData={heatmapData} />
+          <HeatmapSection heatmapData={heatmapData} dayStartHour={settings.dayStartHour} />
         </SectionBoundary>
 
         <SectionBoundary sectionName="InsightsCard">

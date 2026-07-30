@@ -6,6 +6,7 @@ export interface TagConfig {
   icon: keyof typeof Feather.glyphMap;
   color: string;
   bg: string;
+  isDeleted?: boolean;
 }
 
 export const TAGS: TagConfig[] = [

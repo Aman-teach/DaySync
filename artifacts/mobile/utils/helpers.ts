@@ -8,6 +8,35 @@ export function getDateKey(date: Date = new Date(), dayStartHour = 4): string {
   return d.toISOString().slice(0, 10);
 }
 
+export function parseDateKeySafely(dateKey: string | null | undefined): Date | null {
+  if (!dateKey || typeof dateKey !== 'string') return null;
+  const parts = dateKey.split('-');
+  if (parts.length !== 3) return null;
+  
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10);
+  const day = parseInt(parts[2], 10);
+  
+  if (isNaN(year) || isNaN(month) || isNaN(day)) return null;
+  
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > 31) return null;
+
+  const dateObj = new Date(year, month - 1, day);
+  if (isNaN(dateObj.getTime())) return null;
+  
+  // Prevent JS Date wrap-around (e.g. Feb 30 -> March 2)
+  if (
+    dateObj.getFullYear() !== year ||
+    dateObj.getMonth() !== month - 1 ||
+    dateObj.getDate() !== day
+  ) {
+    return null;
+  }
+  
+  return dateObj;
+}
+
 export function generateId(): string {
   return Date.now().toString() + Math.random().toString(36).slice(2, 9);
 }
@@ -40,9 +69,9 @@ export function getFocusScore(entries: Entry[]): number {
 
     if (entry.focus === 'deep') {
       totalPoints += blocks * 20; // 20 points per 30m block
-    } else if (entry.focus === 'light') {
+    } else if (entry.focus === 'normal' || entry.focus === 'light') {
       totalPoints += blocks * 10; // 10 points per 30m block
-    } else if (entry.focus === 'off') {
+    } else if (entry.focus === 'distracted' || entry.focus === 'off') {
       totalPoints -= blocks * 10; // -10 points per 30m block
     } else if (entry.focus === 'neutral') {
       totalPoints += 0; // Neutral acts as a check-in to pause decay, but gives 0 points
@@ -76,8 +105,10 @@ export function getDeltaScore(todayEntries: Entry[], yesterdayEntries: Entry[]):
 }
 
 export function getTimeWasted(entries: Entry[]): number {
-  // Returns total minutes wasted based on 'off' focus level
-  return entries.filter(e => e.focus === 'off').reduce((acc, e) => acc + e.intervalMinutes, 0);
+  // Returns total distracted minutes (new: 'distracted', legacy: 'off')
+  return entries
+    .filter(e => e.focus === 'distracted' || e.focus === 'off')
+    .reduce((acc, e) => acc + (e.duration ?? e.intervalMinutes ?? 0), 0);
 }
 
 export function getTodayEntries(entries: Entry[], dayStartHour = 4): Entry[] {
@@ -96,7 +127,7 @@ export function getEntriesForDate(entries: Entry[], dateKey: string): Entry[] {
 export function getTagBreakdown(entries: Entry[], interval: number): Record<string, number> {
   const bd: Record<string, number> = {};
   for (const entry of entries) {
-    for (const tag of entry.tags) {
+    for (const tag of (entry.tags || [])) {
       bd[tag] = (bd[tag] ?? 0) + interval;
     }
   }

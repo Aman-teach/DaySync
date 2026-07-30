@@ -8,6 +8,7 @@ export const APPWRITE_CONFIG = {
     EPISODES:     process.env.EXPO_PUBLIC_APPWRITE_COLLECTION_EPISODES  || 'episodes',
     ACTIONS:      process.env.EXPO_PUBLIC_APPWRITE_COLLECTION_ACTIONS   || 'actions',
     TASKS:        process.env.EXPO_PUBLIC_APPWRITE_COLLECTION_TASKS     || 'tasks',
+    TAGS:         process.env.EXPO_PUBLIC_APPWRITE_COLLECTION_TAGS      || 'cadence_tags',
   },
   IMAGES_BUCKET_ID: process.env.EXPO_PUBLIC_APPWRITE_BUCKET_IMAGES || '6a60c17d003ab60c617c',
   FUNCTIONS: {

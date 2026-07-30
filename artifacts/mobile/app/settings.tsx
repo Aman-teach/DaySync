@@ -138,11 +138,6 @@ export default function SettingsScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.pageHeader}>
-          <Image
-            source={require('@/assets/images/logo.png')}
-            style={{ width: 38, height: 38, borderRadius: 10 }}
-            contentFit="contain"
-          />
           <Text style={[styles.pageTitle, { color: colors.foreground }]}>DaySync</Text>
         </View>
 
@@ -256,6 +251,11 @@ export default function SettingsScreen() {
 
         {/* Data */}
         <Section title="DATA">
+          <SettingRow
+            label="Manage Domains & Activities"
+            onPress={() => router.push('/manage-domains')}
+            rightEl={<Feather name="layers" size={16} color={colors.mutedForeground} />}
+          />
           <SettingRow
             label="Manage Tags"
             onPress={() => setShowTagManager(true)}

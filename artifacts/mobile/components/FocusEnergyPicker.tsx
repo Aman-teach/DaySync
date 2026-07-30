@@ -13,10 +13,10 @@ import { Feather } from '@expo/vector-icons';
 import { ScoreImpactPreview } from '@/components/ScoreImpactPreview';
 
 const FOCUS_OPTIONS: { value: FocusLevel; label: string; sub: string; color: string; icon: keyof typeof Feather.glyphMap }[] = [
-  { value: 'deep',    label: 'Deep',    sub: 'In the zone',    icon: 'zap',    color: '#4F46E5' }, // Electric Indigo: Intense psychological flow state
-  { value: 'light',   label: 'Light',   sub: 'Casual mode',    icon: 'sun',    color: '#0891B2' }, // Vibrant Cyan: Breezy, energetic but calm
-  { value: 'neutral', label: 'Neutral', sub: 'Routine/Life',   icon: 'coffee', color: '#64748B' }, // Slate Gray: Grounding, routine, balanced
-  { value: 'off',     label: 'Off',     sub: 'Mind elsewhere', icon: 'moon',   color: '#3F3F46' }, // Dark Zinc: Muted, disconnected
+  { value: 'deep',       label: 'Deep',       sub: 'In the zone',    icon: 'zap',          color: '#4F46E5' },
+  { value: 'normal',     label: 'Normal',     sub: 'Casual mode',    icon: 'sun',          color: '#0891B2' },
+  { value: 'distracted', label: 'Distracted', sub: 'Loss focus',     icon: 'alert-circle', color: '#F59E0B' },
+  { value: 'neutral',    label: 'Neutral',    sub: 'Routine/Life',   icon: 'coffee',       color: '#64748B' },
 ];
 
 const ENERGY_OPTIONS: { value: EnergyLevel; label: string; sub: string; icon: keyof typeof Feather.glyphMap; color: string }[] = [
@@ -176,7 +176,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginLeft: 2,
   },
-  row: { flexDirection: 'row', gap: 6 },
+  row: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   pill: {
     flexDirection: 'row',
     alignItems: 'center',

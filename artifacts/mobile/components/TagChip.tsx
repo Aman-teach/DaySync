@@ -24,10 +24,11 @@ export function TagChip({ tagId, tag: tagProp, selected = false, onPress, size =
   const { tags } = useApp();
   
   const tag = tagProp ?? tags.find(t => t.id === tagId) ?? getTag(tagId);
-  const label  = tag?.label ?? tagId;
-  const icon   = tag?.icon;
-  const bgColor    = tag?.bg    ?? '#E8E8E8';
-  const textColor  = tag?.color ?? '#444';
+  const isUnknown = !tag;
+  const label  = tag?.label ?? 'Unknown Tag';
+  const icon   = tag?.icon ?? 'help-circle';
+  const bgColor    = tag?.bg    ?? (isUnknown ? 'transparent' : '#E8E8E8');
+  const textColor  = tag?.color ?? '#9CA3AF';
   const isSmall = size === 'sm';
 
   const scale   = useSharedValue(1);
@@ -71,8 +72,9 @@ export function TagChip({ tagId, tag: tagProp, selected = false, onPress, size =
           isSmall ? styles.chipSm : styles.chipMd,
           {
             backgroundColor: selected ? tag?.color ?? '#2D6A4F' : bgColor,
-            borderWidth: selected ? 0 : 1.5,
-            borderColor: (tag?.color ?? '#cccccc') + '55',
+            borderWidth: selected ? 0 : (isUnknown ? 1 : 1.5),
+            borderColor: (tag?.color ?? '#cccccc') + (isUnknown ? '' : '55'),
+            borderStyle: isUnknown ? 'dashed' : 'solid',
           },
           containerStyle,
         ]}

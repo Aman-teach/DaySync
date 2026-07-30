@@ -3,7 +3,7 @@ import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
+  FlatList,
   TouchableOpacity,
   Platform,
 } from 'react-native';
@@ -12,7 +12,7 @@ import { useColors } from '@/hooks/useColors';
 import { useApp } from '@/context/AppContext';
 import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { getFocusScore, getDateKey } from '@/utils/helpers';
+import { getFocusScore, getDateKey, parseDateKeySafely } from '@/utils/helpers';
 
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
@@ -26,8 +26,21 @@ export default function HistoryScreen() {
     const today = new Date();
     const todayKey = getDateKey(today, settings.dayStartHour);
     
-    // Group entries by dateKey
+    let cutoffKey = '';
+    if (timeFilter !== 'all') {
+      const days = parseInt(timeFilter);
+      const cutoff = new Date(today);
+      cutoff.setDate(cutoff.getDate() - days);
+      cutoffKey = getDateKey(cutoff, settings.dayStartHour);
+    }
+    
+    // O(S) Set lookup for summaries instead of O(D*S) array iterations
+    const summarySet = new Set(daySummaries.map(s => s.dateKey));
+    
+    // Group entries with early cutoff exit
     const grouped = entries.reduce((acc, entry) => {
+      if (cutoffKey && entry.dateKey < cutoffKey) return acc;
+      
       if (!acc[entry.dateKey]) {
         acc[entry.dateKey] = [];
       }
@@ -35,14 +48,12 @@ export default function HistoryScreen() {
       return acc;
     }, {} as Record<string, typeof entries>);
 
-    // Convert to array and filter
-    let list = Object.entries(grouped)
+    // Map and sort only the filtered days
+    const list = Object.entries(grouped)
       .map(([dateKey, dayEntries]) => {
         const score = getFocusScore(dayEntries);
-        const hasWrap = daySummaries.some(s => s.dateKey === dateKey);
-        
-        const [yyyy, mm, dd] = dateKey.split('-');
-        const dateObj = new Date(parseInt(yyyy), parseInt(mm) - 1, parseInt(dd));
+        const hasWrap = summarySet.has(dateKey);
+        const dateObj = parseDateKeySafely(dateKey);
         
         return {
           dateKey,
@@ -50,17 +61,11 @@ export default function HistoryScreen() {
           score,
           hasWrap,
           dateObj,
+          isValidDate: dateObj !== null,
           isToday: dateKey === todayKey,
         };
       })
       .sort((a, b) => b.dateKey.localeCompare(a.dateKey));
-
-    if (timeFilter !== 'all') {
-      const days = parseInt(timeFilter);
-      const cutoff = new Date(today);
-      cutoff.setDate(cutoff.getDate() - days);
-      list = list.filter(item => item.dateObj >= cutoff);
-    }
 
     return list;
   }, [entries, daySummaries, settings.dayStartHour, timeFilter]);
@@ -69,49 +74,58 @@ export default function HistoryScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
-      <ScrollView
+      <FlatList
+        data={historyList}
+        keyExtractor={(item) => item.dateKey}
         contentContainerStyle={[
           styles.scroll,
           { paddingTop: topPad + 12, paddingBottom: Platform.OS === 'web' ? 34 + 84 : insets.bottom + 100 },
+          historyList.length === 0 && { flexGrow: 1 }
         ]}
         showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.header}>
-          <Text style={[styles.title, { color: colors.foreground }]}>History</Text>
-          <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>
-            Review your past timelines and execution guides.
-          </Text>
-        </View>
+        initialNumToRender={10}
+        windowSize={5}
+        maxToRenderPerBatch={5}
+        removeClippedSubviews={Platform.OS === 'android'}
+        ListHeaderComponent={
+          <>
+            <View style={styles.header}>
+              <Text style={[styles.title, { color: colors.foreground }]}>History</Text>
+              <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>
+                Review your past timelines and execution guides.
+              </Text>
+            </View>
 
-        {/* Time Filters */}
-        <View style={[styles.filterBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          {(['7', '30', 'all'] as const).map(f => {
-            const isActive = timeFilter === f;
-            const label = f === '7' ? 'Last 7 Days' : f === '30' ? 'Last 30 Days' : 'All Time';
-            return (
-              <TouchableOpacity
-                key={f}
-                style={[styles.filterBtn, isActive && { backgroundColor: colors.primary }]}
-                onPress={() => setTimeFilter(f)}
-              >
-                <Text style={[styles.filterText, isActive ? { color: '#fff' } : { color: colors.mutedForeground }]}>
-                  {label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+            {/* Time Filters */}
+            <View style={[styles.filterBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              {(['7', '30', 'all'] as const).map(f => {
+                const isActive = timeFilter === f;
+                const label = f === '7' ? 'Last 7 Days' : f === '30' ? 'Last 30 Days' : 'All Time';
+                return (
+                  <TouchableOpacity
+                    key={f}
+                    style={[styles.filterBtn, isActive && { backgroundColor: colors.primary }]}
+                    onPress={() => setTimeFilter(f)}
+                  >
+                    <Text style={[styles.filterText, isActive ? { color: '#fff' } : { color: colors.mutedForeground }]}>
+                      {label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
 
-        <TouchableOpacity 
-          style={[styles.compareBtn, { backgroundColor: colors.primary }]}
-          onPress={() => router.push('/compare')}
-          activeOpacity={0.8}
-        >
-          <Feather name="columns" size={16} color="#fff" />
-          <Text style={styles.compareBtnText}>Compare Today vs Yesterday</Text>
-        </TouchableOpacity>
-
-        {historyList.length === 0 ? (
+            <TouchableOpacity 
+              style={[styles.compareBtn, { backgroundColor: colors.primary }]}
+              onPress={() => router.push('/compare')}
+              activeOpacity={0.8}
+            >
+              <Feather name="columns" size={16} color="#fff" />
+              <Text style={styles.compareBtnText}>Compare Today vs Yesterday</Text>
+            </TouchableOpacity>
+          </>
+        }
+        ListEmptyComponent={
           <View style={[styles.emptyState, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <Feather name="clock" size={28} color={colors.mutedForeground} />
             <Text style={[styles.emptyTitle, { color: colors.foreground }]}>No History</Text>
@@ -119,48 +133,46 @@ export default function HistoryScreen() {
               Your past logs will appear here.
             </Text>
           </View>
-        ) : (
-          <View style={styles.list}>
-            {historyList.map((item) => (
-              <TouchableOpacity
-                key={item.dateKey}
-                style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
-                activeOpacity={0.7}
-                onPress={() => router.push({ pathname: '/history/[date]', params: { date: item.dateKey } } as any)}
-              >
-                <View style={styles.cardHeader}>
-                  <Text style={[styles.cardDate, { color: colors.foreground }]}>
-                    {item.isToday ? "Today" : item.dateObj.toLocaleDateString(undefined, {
-                      weekday: 'short',
-                      month: 'short',
-                      day: 'numeric'
-                    })}
-                  </Text>
-                  {item.hasWrap && (
-                    <View style={[styles.wrapBadge, { backgroundColor: colors.primary + '15' }]}>
-                      <Feather name="zap" size={12} color={colors.primary} />
-                      <Text style={[styles.wrapBadgeText, { color: colors.primary }]}>Wrap</Text>
-                    </View>
-                  )}
+        }
+        renderItem={({ item }) => (
+          <TouchableOpacity
+            style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
+            activeOpacity={0.7}
+            onPress={() => router.push({ pathname: '/history/[date]', params: { date: item.dateKey } } as any)}
+          >
+            <View style={styles.cardHeader}>
+              <Text style={[styles.cardDate, { color: colors.foreground }]}>
+                {item.isToday ? "Today" : (
+                  item.isValidDate ? item.dateObj!.toLocaleDateString(undefined, {
+                    weekday: 'short',
+                    month: 'short',
+                    day: 'numeric'
+                  }) : `Invalid Date (${item.dateKey})`
+                )}
+              </Text>
+              {item.hasWrap && (
+                <View style={[styles.wrapBadge, { backgroundColor: colors.primary + '15' }]}>
+                  <Feather name="zap" size={12} color={colors.primary} />
+                  <Text style={[styles.wrapBadgeText, { color: colors.primary }]}>Wrap</Text>
                 </View>
-                
-                <View style={styles.cardStats}>
-                  <View style={styles.statBox}>
-                    <Text style={[styles.statValue, { color: colors.foreground }]}>{item.entriesCount}</Text>
-                    <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Entries</Text>
-                  </View>
-                  <View style={styles.statBox}>
-                    <Text style={[styles.statValue, { color: colors.primary }]}>{item.score}</Text>
-                    <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Focus Score</Text>
-                  </View>
-                </View>
-                
-                <Feather name="chevron-right" size={20} color={colors.mutedForeground} style={styles.chevron} />
-              </TouchableOpacity>
-            ))}
-          </View>
+              )}
+            </View>
+            
+            <View style={styles.cardStats}>
+              <View style={styles.statBox}>
+                <Text style={[styles.statValue, { color: colors.foreground }]}>{item.entriesCount}</Text>
+                <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Entries</Text>
+              </View>
+              <View style={styles.statBox}>
+                <Text style={[styles.statValue, { color: colors.primary }]}>{item.score}</Text>
+                <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Focus Score</Text>
+              </View>
+            </View>
+            
+            <Feather name="chevron-right" size={20} color={colors.mutedForeground} style={styles.chevron} />
+          </TouchableOpacity>
         )}
-      </ScrollView>
+      />
     </View>
   );
 }

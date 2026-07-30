@@ -1,12 +1,13 @@
 /**
  * Check-in modal — completely redesigned premium UI
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { Audio } from 'expo-av';
 import {
   Alert,
   Dimensions,
   Keyboard,
+  KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
@@ -26,6 +27,9 @@ import Animated, {
   withSequence,
   withSpring,
   withTiming,
+  LinearTransition,
+  FadeIn,
+  FadeOut,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
@@ -40,7 +44,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
-import { FocusLevel, EnergyLevel } from '@/types';
+import { FocusLevel, EnergyLevel, Domain, Activity } from '@/types';
 import { functions, APPWRITE_CONFIG, ExecutionMethod } from '@/lib/appwrite';
 
 type VoiceState = 'idle' | 'recording' | 'processing' | 'transcribed';
@@ -141,18 +145,21 @@ export default function CheckinScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const router = useRouter();
-  const { addEntry, lastFocus, settings, tags, tasks, entries } = useApp();
+  const { addEntry, updateEntry, lastFocus, settings, tasks, entries, domains, activities } = useApp();
 
   const { mode: initialMode, autoStart } = useLocalSearchParams<{ mode: Mode; autoStart?: string }>();
   const [mode,        setMode]        = useState<Mode>(initialMode ?? 'text');
   const [step,        setStep]        = useState<1 | 2>(1);
   const [voiceState,  setVoiceState]  = useState<VoiceState>('idle');
   const [text,        setText]        = useState('');
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [focus,  setFocus]  = useState<FocusLevel>(lastFocus.focus);
-  const [energy, setEnergy] = useState<EnergyLevel>(lastFocus.energy);
-  const [leverage, setLeverage] = useState<'high' | 'busywork' | undefined>();
-  const [customDuration, setCustomDuration] = useState<number | undefined>();
+  
+  // Progressive Disclosure State
+  const [selectedDomainId, setSelectedDomainId] = useState<string | null>(null);
+  const [selectedActivityId, setSelectedActivityId] = useState<string | null>(null);
+  const [focus,  setFocus]  = useState<FocusLevel | null>(null);
+  const [energy, setEnergy] = useState<EnergyLevel | null>(null);
+  const [customDuration, setCustomDuration] = useState<number | null>(null);
+  
   const [taskId, setTaskId] = useState<string | undefined>();
   const [taskTitle, setTaskTitle] = useState<string | undefined>();
   const [imageUrl, setImageUrl] = useState<string | undefined>();
@@ -165,6 +172,7 @@ export default function CheckinScreen() {
   const timerRef      = useRef<ReturnType<typeof setInterval> | null>(null);
   const inputRef      = useRef<TextInput>(null);
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isSavingRef   = useRef(false);
 
   // Clean up recording if unmounted
   useEffect(() => {
@@ -180,10 +188,10 @@ export default function CheckinScreen() {
     loadCheckinDraft().then(draft => {
       if (!draft) return;
       if (draft.text)          setText(draft.text);
-      if (draft.selectedTags?.length) setSelectedTags(draft.selectedTags);
+      if (draft.domainId)      setSelectedDomainId(draft.domainId);
+      if (draft.activityId)    setSelectedActivityId(draft.activityId);
       if (draft.focus)         setFocus(draft.focus as FocusLevel);
       if (draft.energy)        setEnergy(draft.energy as EnergyLevel);
-      if (draft.leverage)      setLeverage(draft.leverage as 'high' | 'busywork');
       if (draft.customDuration) setCustomDuration(draft.customDuration);
       if (draft.taskId)        setTaskId(draft.taskId);
       if (draft.taskTitle)     setTaskTitle(draft.taskTitle);
@@ -195,17 +203,17 @@ export default function CheckinScreen() {
   const greenAnim  = useSharedValue(0);
   const micScale   = useSharedValue(1);
   const saveScale  = useSharedValue(1);
+  const tagShakeAnim = useSharedValue(0);
 
   // ── Auto-save draft whenever any field changes (debounced 500ms) ──────────
   useEffect(() => {
     if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
     draftTimerRef.current = setTimeout(() => {
-      // Only persist remote URLs — local temp URIs are ephemeral and will break after OS cache clean
-      const persistedImageUrl = imageUrl?.startsWith('https://') ? imageUrl : undefined;
-      saveCheckinDraft({ text, selectedTags, focus, energy, leverage, customDuration, taskId, taskTitle, imageUrl: persistedImageUrl });
+      // Persist all imageUrls (they are copied to documentDirectory upon capture)
+      saveCheckinDraft({ text, domainId: selectedDomainId || undefined, activityId: selectedActivityId || undefined, focus: focus || '', energy: energy || '', customDuration: customDuration || undefined, taskId, taskTitle, imageUrl });
     }, 500);
     return () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current); };
-  }, [text, selectedTags, focus, energy, leverage, customDuration, taskId, taskTitle, imageUrl]);
+  }, [text, selectedDomainId, selectedActivityId, focus, energy, customDuration, taskId, taskTitle, imageUrl]);
 
   useEffect(() => () => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -353,48 +361,53 @@ export default function CheckinScreen() {
 
   // ── Save ──────────────────────────────────────────────────────────────────
   const handleSave = async () => {
-    if (selectedTags.length === 0) {
+    if (isSavingRef.current) return;
+    
+    if (!selectedDomainId || !selectedActivityId || !focus || !energy || !customDuration) {
       try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error); } catch {}
-      Alert.alert('Pick a tag', 'Choose at least one activity before saving.');
       return;
     }
+    
+    isSavingRef.current = true;
     saveScale.value = withSequence(
       withSpring(0.94, { damping: 8, stiffness: 300 }),
       withSpring(1,    { damping: 9, stiffness: 250 })
     );
     setSaving(true);
     try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
-    
-    let finalImageUrl = imageUrl;
-    if (imageUrl && !imageUrl.startsWith('http')) {
-      const uploadedUrl = await uploadImageToAppwrite(imageUrl);
-      if (uploadedUrl) {
-        finalImageUrl = uploadedUrl;
-      } else {
-        Alert.alert('Upload Failed', 'Could not upload your photo to Appwrite. Saving without it.');
-        finalImageUrl = undefined;
+    try {
+      const newEntryId = await addEntry({ 
+        text: text.trim(), 
+        domainId: selectedDomainId,
+        activityId: selectedActivityId,
+        focus, 
+        energy,
+        duration: customDuration,
+        intervalMinutes: customDuration,
+        taskId,
+        taskTitle,
+        imageUrl: imageUrl,
+      });
+      
+      await clearCheckinDraft();
+      router.back();
+
+      // Fire and forget background upload for images
+      if (imageUrl && !imageUrl.startsWith('http')) {
+        uploadImageToAppwrite(imageUrl).then(uploadedUrl => {
+          if (uploadedUrl) {
+            updateEntry(newEntryId, { imageUrl: uploadedUrl });
+          }
+        }).catch(err => {
+          console.log('Background image upload failed', err);
+        });
       }
+    } finally {
+      isSavingRef.current = false;
+      setSaving(false);
     }
-
-    await addEntry({ 
-      text: text.trim(), 
-      tags: selectedTags, 
-      focus, 
-      energy,
-      leverage,
-      intervalMinutes: customDuration || settings.interval,
-      taskId,
-      taskTitle,
-      imageUrl: finalImageUrl,
-    });
-    await clearCheckinDraft();
-    router.back();
   };
 
-  const toggleTag = (id: string) => {
-    try { Haptics.selectionAsync(); } catch {}
-    setSelectedTags(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]);
-  };
 
   const switchMode = (next: Mode) => {
     if (next === mode || voiceState === 'recording') return;
@@ -438,7 +451,20 @@ export default function CheckinScreen() {
           });
 
       if (!result.canceled) {
-        setImageUrl(result.assets[0].uri);
+        const tempUri = result.assets[0].uri;
+        let persistentUri = tempUri;
+        try {
+          if (Platform.OS !== 'web') {
+            const fileName = tempUri.split('/').pop() || `draft-${Date.now()}.jpg`;
+            const newPath = FileSystem.documentDirectory + fileName;
+            await FileSystem.copyAsync({ from: tempUri, to: newPath });
+            persistentUri = newPath;
+          }
+        } catch (e) {
+          console.log('Failed to copy to persistent storage', e);
+        }
+        
+        setImageUrl(persistentUri);
         try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
       }
     } catch (err) {
@@ -456,277 +482,335 @@ export default function CheckinScreen() {
 
   const saveBtnStyle = useAnimatedStyle(() => ({ transform: [{ scale: saveScale.value }] }));
   const micBtnStyle  = useAnimatedStyle(() => ({ transform: [{ scale: micScale.value  }] }));
+  const tagGridStyle = useAnimatedStyle(() => ({ transform: [{ translateX: tagShakeAnim.value }] }));
 
-  // Personality Additions
-  const hour = now.getHours();
-  let greeting = 'Good morning';
-  if (hour >= 12 && hour < 17) greeting = 'Good afternoon';
-  else if (hour >= 17) greeting = 'Good evening';
-  const primaryTag = selectedTags.length > 0 ? tags.find(t => t.id === selectedTags[0]) : null;
-
-  let activityHeader = 'Where are you spending your time?';
-  const lastEntry = entries[0];
-  if (lastEntry) {
-    const diffMs = now.getTime() - new Date(lastEntry.createdAt).getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    if (diffMins < 60 && diffMins > 0) {
-      activityHeader = `What did you do for the last ${diffMins}m?`;
-    } else if (diffMins >= 60 && diffMins < 24 * 60) {
-      const hours = Math.floor(diffMins / 60);
-      const mins = diffMins % 60;
-      const timeStr = mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
-      activityHeader = `What did you do for the last ${timeStr}?`;
-    }
-  }
+  const greetingTitle = useMemo(() => {
+    const titles = ["Hello, Aman.", "Welcome back.", "Ready to focus?", "Let's log it.", "Hey, Aman."];
+    return titles[Math.floor(Math.random() * titles.length)];
+  }, []);
+  
+  const greetingSubtitle = useMemo(() => {
+    const subtitles = ["Let's log your session.", "What did you accomplish?", "Time to capture your progress.", "Record your momentum.", "Every session counts."];
+    return subtitles[Math.floor(Math.random() * subtitles.length)];
+  }, []);
 
   // ── Shared bottom form ─────────────────────────────────────────────────────
   const bottomForm = (
-    <>
+    <View style={{ gap: 20, paddingHorizontal: 4 }}>
       {/* Personalized Greeting */}
-      <View style={{ paddingHorizontal: 4, marginBottom: 16, marginTop: 4 }}>
-        <Text style={{ fontSize: 24, fontFamily: 'Inter_400Regular', color: isRecording ? '#ffffff' : colors.foreground, letterSpacing: -0.5 }}>
-          {greeting}, Aman.
+      <View style={{ marginBottom: 16, marginTop: 4 }}>
+        <Text style={{ fontSize: 28, fontFamily: 'Inter_400Regular', color: isRecording ? '#ffffff' : colors.foreground, letterSpacing: -0.5 }}>
+          {greetingTitle}
         </Text>
-        <Text style={{ fontSize: 15, fontFamily: 'Inter_400Regular', color: isRecording ? '#ffffffaa' : colors.mutedForeground, marginTop: 2 }}>
-          {lastEntry ? 'Ready to log your next session?' : "Let's log your first session."}
+        <Text style={{ fontSize: 16, fontFamily: 'Inter_400Regular', color: isRecording ? '#ffffffaa' : colors.mutedForeground, marginTop: 4 }}>
+          {greetingSubtitle}
         </Text>
       </View>
 
-      {/* Tags */}
-      <View style={styles.formCard}>
-        <View style={styles.formCardHeader}>
-          <View style={styles.formCardTitleRow}>
-            <Feather name="tag" size={13} color={isRecording ? '#fff' : colors.primary} />
-            <Text style={[styles.formCardTitle, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>
-              {activityHeader}
-            </Text>
-          </View>
-          {selectedTags.length === 0 && (
-            <View style={styles.requiredPill}>
-              <Text style={styles.requiredText}>required</Text>
-            </View>
-          )}
-          {selectedTags.length > 0 && (
-            <View style={[styles.donePill, { backgroundColor: colors.primary + '22' }]}>
-              <Feather name="check" size={10} color={colors.primary} />
-              <Text style={[styles.doneText, { color: colors.primary }]}>{selectedTags.length} selected</Text>
-            </View>
-          )}
-        </View>
-        <View style={styles.tagGrid}>
-          {tags.map(tag => (
-            <TagChip
-              key={tag.id}
-              tagId={tag.id}
-              tag={tag}
-              selected={selectedTags.includes(tag.id)}
-              onPress={() => toggleTag(tag.id)}
-              size="md"
-            />
-          ))}
-        </View>
-      </View>
-
-      {tasks.length > 0 && (
-        <>
-          <View style={{ height: 1, backgroundColor: isRecording ? '#ffffff15' : colors.border, marginVertical: 4 }} />
-          {/* AtlasOS Task Linker */}
-          <View style={styles.formCard}>
-          <TouchableOpacity
-            style={styles.taskDropdownToggle}
-            onPress={() => setShowTaskList(!showTaskList)}
+      {/* 1. Domain */}
+      <Animated.View style={[styles.premiumCard, { backgroundColor: isRecording ? '#ffffff11' : colors.card, borderColor: isRecording ? '#ffffff22' : colors.border }]}>
+        {selectedDomainId ? (
+          <TouchableOpacity 
+            onPress={() => {
+              setSelectedDomainId(null);
+              setSelectedActivityId(null);
+              setFocus(null);
+              setEnergy(null);
+              setCustomDuration(null);
+              try { Haptics.selectionAsync(); } catch {}
+            }}
+            style={styles.premiumCardHeaderCollapsed}
             activeOpacity={0.7}
           >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-              <Feather
-                name={taskId ? 'link-2' : 'link'}
-                size={16}
-                color={taskId ? (isRecording ? '#fff' : colors.primary) : (isRecording ? '#ffffffcc' : colors.mutedForeground)}
-              />
-              <Text
-                style={[styles.taskDropdownText, { color: taskId ? (isRecording ? '#fff' : colors.primary) : (isRecording ? '#ffffffcc' : colors.foreground) }]}
-                numberOfLines={1}
-              >
-                {taskId ? taskTitle : 'Link an AtlasOS Task...'}
-              </Text>
+            <Text style={[styles.premiumCardTitleCollapsed, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>Area</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={[styles.premiumCardValue, { color: isRecording ? '#fff' : colors.primary }]}>{domains.find(d => d.id === selectedDomainId)?.name}</Text>
+              <Feather name="chevron-down" size={16} color={isRecording ? '#ffffff66' : colors.mutedForeground} />
             </View>
-            <Feather
-              name={showTaskList ? 'chevron-up' : 'chevron-down'}
-              size={16}
-              color={isRecording ? '#ffffffcc' : colors.mutedForeground}
-            />
           </TouchableOpacity>
-
-          {showTaskList && (
-            <View style={[styles.taskListContainer, { borderTopColor: isRecording ? '#ffffff33' : colors.border }]}>
-              {taskId && (
+        ) : (
+          <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(200)} style={{ padding: 16 }}>
+            <Text style={[styles.premiumCardTitleActive, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>Select Area</Text>
+            <View style={styles.premiumGrid}>
+              {[...domains].sort((a,b) => a.position - b.position).map(d => (
                 <TouchableOpacity
-                  style={[styles.taskListItem, { backgroundColor: isRecording ? '#ffffff11' : colors.card, borderColor: isRecording ? '#ffffff22' : colors.border, borderWidth: 1 }]}
-                  onPress={() => {
-                    setTaskId(undefined);
-                    setTaskTitle(undefined);
-                    setShowTaskList(false);
-                  }}
+                  key={d.id}
+                  style={[styles.premiumTile, { backgroundColor: isRecording ? '#ffffff11' : (d.color || colors.primary) + '11', borderColor: isRecording ? '#ffffff22' : (d.color || colors.primary) + '22' }]}
+                  onPress={() => { setSelectedDomainId(d.id); try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {} }}
                 >
-                  <Feather name="x" size={14} color={isRecording ? '#ff8888' : colors.destructive} />
-                  <Text style={[styles.taskListText, { color: isRecording ? '#ff8888' : colors.destructive }]}>
-                    Clear selection
-                  </Text>
+                  <View style={[styles.premiumTileIconWrap, { backgroundColor: isRecording ? '#ffffff22' : (d.color || colors.primary) + '22' }]}>
+                    <Feather name={d.icon as any} size={18} color={isRecording ? '#fff' : (d.color || colors.primary)} />
+                  </View>
+                  <Text style={[styles.premiumTileText, { color: isRecording ? '#fff' : colors.foreground }]}>{d.name}</Text>
                 </TouchableOpacity>
-              )}
-              {tasks.map(task => {
-                const isSelected = taskId === task.id;
-                const isDone = task.status === 'done';
-                return (
-                  <TouchableOpacity
-                    key={task.id}
-                    style={[
-                      styles.taskListItem,
-                      {
-                        backgroundColor: isSelected ? (isRecording ? '#ffffff22' : colors.primary + '15') : (isRecording ? '#ffffff11' : colors.card),
-                        borderColor: isSelected ? (isRecording ? '#ffffff55' : colors.primary + '55') : (isRecording ? '#ffffff22' : colors.border),
-                        borderWidth: 1,
-                      }
-                    ]}
-                    onPress={() => {
-                      setTaskId(task.id);
-                      setTaskTitle(task.title);
-                      setShowTaskList(false);
-                    }}
-                  >
-                    <Feather
-                      name={isSelected ? 'check-circle' : (isDone ? 'check' : 'circle')}
-                      size={14}
-                      color={isSelected || isDone ? (isRecording ? '#fff' : colors.primary) : (isRecording ? '#ffffff66' : colors.mutedForeground)}
-                    />
-                    <Text
-                      style={[styles.taskListText, { color: isSelected ? (isRecording ? '#fff' : colors.primary) : (isRecording ? '#ffffffcc' : colors.foreground) }]}
-                      numberOfLines={1}
-                    >
-                      {task.title}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
+              ))}
             </View>
+          </Animated.View>
+        )}
+      </Animated.View>
+
+      {/* 2. Activity */}
+      {selectedDomainId && (
+        <Animated.View entering={FadeIn.duration(250)} style={[styles.premiumCard, { backgroundColor: isRecording ? '#ffffff11' : colors.card, borderColor: isRecording ? '#ffffff22' : colors.border }]}>
+          {selectedActivityId ? (
+            <TouchableOpacity 
+              onPress={() => {
+                setSelectedActivityId(null);
+                setFocus(null);
+                setEnergy(null);
+                setCustomDuration(null);
+                try { Haptics.selectionAsync(); } catch {}
+              }}
+              style={styles.premiumCardHeaderCollapsed}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.premiumCardTitleCollapsed, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>Activity</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={[styles.premiumCardValue, { color: isRecording ? '#fff' : colors.primary }]}>{activities.find(a => a.id === selectedActivityId)?.name}</Text>
+                <Feather name="chevron-down" size={16} color={isRecording ? '#ffffff66' : colors.mutedForeground} />
+              </View>
+            </TouchableOpacity>
+          ) : (
+            <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(200)} style={{ padding: 16 }}>
+              <Text style={[styles.premiumCardTitleActive, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>Select Activity</Text>
+              <View style={styles.premiumGrid}>
+                {[...activities].filter(a => a.domainId === selectedDomainId).sort((a,b) => a.position - b.position).map(a => (
+                  <TouchableOpacity
+                    key={a.id}
+                    style={[styles.premiumTile, { backgroundColor: isRecording ? '#ffffff11' : colors.background, borderColor: isRecording ? '#ffffff22' : colors.border }]}
+                    onPress={() => { setSelectedActivityId(a.id); try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {} }}
+                  >
+                    {a.icon && (
+                      <View style={[styles.premiumTileIconWrap, { backgroundColor: isRecording ? '#ffffff22' : colors.card, width: 28, height: 28 }]}>
+                        <Feather name={a.icon as any} size={14} color={isRecording ? '#fff' : colors.foreground} />
+                      </View>
+                    )}
+                    <Text style={[styles.premiumTileText, { color: isRecording ? '#fff' : colors.foreground, marginLeft: a.icon ? 0 : 4 }]}>{a.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </Animated.View>
           )}
-        </View>
-        </>
+        </Animated.View>
       )}
 
-      <View style={{ height: 1, backgroundColor: isRecording ? '#ffffff15' : colors.border, marginVertical: 4 }} />
-
-      {/* Focus + energy */}
-      <View style={styles.formCard}>
-        <View style={styles.formCardHeader}>
-          <View style={styles.formCardTitleRow}>
-            <Feather name="bar-chart-2" size={13} color={isRecording ? '#fff' : colors.primary} />
-            <Text style={[styles.formCardTitle, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>
-              How did it feel?
-            </Text>
-          </View>
-        </View>
-        <FocusEnergyPicker
-          focus={focus}
-          energy={energy}
-          onFocusChange={setFocus}
-          onEnergyChange={setEnergy}
-          isRecording={isRecording}
-        />
-      </View>
-
-      <View style={{ height: 1, backgroundColor: isRecording ? '#ffffff15' : colors.border, marginVertical: 4 }} />
-
-      {/* Leverage */}
-      <View style={styles.formCard}>
-        <View style={styles.formCardHeader}>
-          <View style={styles.formCardTitleRow}>
-            <Feather name="trending-up" size={13} color={isRecording ? '#fff' : colors.primary} />
-            <Text style={[styles.formCardTitle, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>
-              Were you doing high-leverage work or busywork?
-            </Text>
-          </View>
-        </View>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <Pressable
-            style={[
-              { flex: 1, paddingHorizontal: 6, borderRadius: 100, borderWidth: leverage === 'high' ? 0 : 1.5, alignItems: 'center', justifyContent: 'center', paddingVertical: leverage === 'high' ? 9.5 : 8 },
-              leverage === 'high' 
-                ? { backgroundColor: '#4F46E5', borderColor: '#4F46E5' } // Indigo
-                : { backgroundColor: isRecording ? '#ffffff11' : colors.card, borderColor: isRecording ? '#ffffff22' : colors.border }
-            ]}
-            onPress={() => {
-              try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
-              setLeverage(leverage === 'high' ? undefined : 'high');
-            }}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-              <Feather name="zap" size={15} color={leverage === 'high' ? '#fff' : (isRecording ? '#ffffffcc' : colors.mutedForeground)} />
-              <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: leverage === 'high' ? '#fff' : (isRecording ? '#ffffffcc' : colors.foreground) }}>10x Leverage</Text>
-            </View>
-          </Pressable>
-          <Pressable
-             style={[
-              { flex: 1, paddingHorizontal: 6, borderRadius: 100, borderWidth: leverage === 'busywork' ? 0 : 1.5, alignItems: 'center', justifyContent: 'center', paddingVertical: leverage === 'busywork' ? 9.5 : 8 },
-              leverage === 'busywork' 
-                ? { backgroundColor: '#F59E0B', borderColor: '#F59E0B' } // Amber
-                : { backgroundColor: isRecording ? '#ffffff11' : colors.card, borderColor: isRecording ? '#ffffff22' : colors.border }
-            ]}
-            onPress={() => {
-              try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
-              setLeverage(leverage === 'busywork' ? undefined : 'busywork');
-            }}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-              <Feather name="clock" size={15} color={leverage === 'busywork' ? '#fff' : (isRecording ? '#ffffffcc' : colors.mutedForeground)} />
-              <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: leverage === 'busywork' ? '#fff' : (isRecording ? '#ffffffcc' : colors.foreground) }}>Busywork</Text>
-            </View>
-          </Pressable>
-        </View>
-      </View>
-
-      <View style={{ height: 1, backgroundColor: isRecording ? '#ffffff15' : colors.border, marginVertical: 4 }} />
-
-      {/* Override Duration */}
-      <View style={styles.formCard}>
-        <View style={styles.formCardHeader}>
-          <View style={styles.formCardTitleRow}>
-            <Feather name="clock" size={13} color={isRecording ? '#fff' : colors.primary} />
-            <Text style={[styles.formCardTitle, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>
-              Are you logging a past session?
-            </Text>
-          </View>
-        </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-          {[15, 30, 45, 60, 90, 120, 180].map(dur => (
-            <Pressable
-              key={dur}
-              style={[
-                { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 100, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-                customDuration === dur 
-                  ? { backgroundColor: colors.primary, borderColor: colors.primary }
-                  : { backgroundColor: isRecording ? '#ffffff11' : colors.card, borderColor: isRecording ? '#ffffff22' : colors.border }
-              ]}
+      {/* 3. Focus */}
+      {selectedActivityId && (
+        <Animated.View entering={FadeIn.duration(250)} style={[styles.premiumCard, { backgroundColor: isRecording ? '#ffffff11' : colors.card, borderColor: isRecording ? '#ffffff22' : colors.border }]}>
+          {focus ? (
+             <TouchableOpacity 
               onPress={() => {
+                setFocus(null);
+                setEnergy(null);
+                setCustomDuration(null);
                 try { Haptics.selectionAsync(); } catch {}
-                setCustomDuration(customDuration === dur ? undefined : dur);
               }}
+              style={styles.premiumCardHeaderCollapsed}
+              activeOpacity={0.7}
             >
-              <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: customDuration === dur ? '#fff' : (isRecording ? '#ffffffcc' : colors.foreground) }}>
-                {dur >= 60 ? (dur % 60 === 0 ? `${dur / 60}h` : `${Math.floor(dur / 60)}h ${dur % 60}m`) : `${dur}m`}
-              </Text>
-            </Pressable>
-          ))}
-        </ScrollView>
-      </View>
+              <Text style={[styles.premiumCardTitleCollapsed, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>Focus</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={[styles.premiumCardValue, { color: isRecording ? '#fff' : colors.primary, textTransform: 'capitalize' }]}>{focus}</Text>
+                <Feather name="chevron-down" size={16} color={isRecording ? '#ffffff66' : colors.mutedForeground} />
+              </View>
+            </TouchableOpacity>
+          ) : (
+            <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(200)} style={{ padding: 16 }}>
+              <Text style={[styles.premiumCardTitleActive, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>Focus Level</Text>
+              <View style={styles.premiumGridRow}>
+                {['deep', 'normal', 'distracted', 'neutral'].map(f => {
+                  const iconName = f === 'deep' ? 'target' : f === 'normal' ? 'check-circle' : f === 'distracted' ? 'wind' : 'minus';
+                  return (
+                  <TouchableOpacity
+                    key={f}
+                    style={[styles.premiumPill, { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: isRecording ? '#ffffff11' : colors.background, borderColor: isRecording ? '#ffffff22' : colors.border }]}
+                    onPress={() => { setFocus(f as any); try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {} }}
+                  >
+                    <Feather name={iconName as any} size={14} color={isRecording ? '#ffffffcc' : colors.mutedForeground} />
+                    <Text style={[styles.premiumPillText, { color: isRecording ? '#fff' : colors.foreground, textTransform: 'capitalize' }]}>{f}</Text>
+                  </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </Animated.View>
+          )}
+        </Animated.View>
+      )}
 
+      {/* 4. Energy */}
+      {focus && (
+        <Animated.View entering={FadeIn.duration(250)} style={[styles.premiumCard, { backgroundColor: isRecording ? '#ffffff11' : colors.card, borderColor: isRecording ? '#ffffff22' : colors.border }]}>
+          {energy ? (
+             <TouchableOpacity 
+              onPress={() => {
+                setEnergy(null);
+                setCustomDuration(null);
+                try { Haptics.selectionAsync(); } catch {}
+              }}
+              style={styles.premiumCardHeaderCollapsed}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.premiumCardTitleCollapsed, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>Energy</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={[styles.premiumCardValue, { color: isRecording ? '#fff' : colors.primary, textTransform: 'capitalize' }]}>{energy}</Text>
+                <Feather name="chevron-down" size={16} color={isRecording ? '#ffffff66' : colors.mutedForeground} />
+              </View>
+            </TouchableOpacity>
+          ) : (
+            <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(200)} style={{ padding: 16 }}>
+              <Text style={[styles.premiumCardTitleActive, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>Energy Level</Text>
+              <View style={styles.premiumGridRow}>
+                {['high', 'medium', 'low'].map(e => {
+                  const iconName = e === 'high' ? 'zap' : e === 'medium' ? 'activity' : 'battery';
+                  return (
+                  <TouchableOpacity
+                    key={e}
+                    style={[styles.premiumPill, { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: isRecording ? '#ffffff11' : colors.background, borderColor: isRecording ? '#ffffff22' : colors.border }]}
+                    onPress={() => { setEnergy(e as any); try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {} }}
+                  >
+                    <Feather name={iconName as any} size={14} color={isRecording ? '#ffffffcc' : colors.mutedForeground} />
+                    <Text style={[styles.premiumPillText, { color: isRecording ? '#fff' : colors.foreground, textTransform: 'capitalize' }]}>{e}</Text>
+                  </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </Animated.View>
+          )}
+        </Animated.View>
+      )}
 
-    </>
+      {/* 5. Duration */}
+      {energy && (
+        <Animated.View entering={FadeIn.duration(250)} style={[styles.premiumCard, { backgroundColor: isRecording ? '#ffffff11' : colors.card, borderColor: isRecording ? '#ffffff22' : colors.border }]}>
+          {customDuration ? (
+             <TouchableOpacity 
+              onPress={() => {
+                setCustomDuration(null);
+                try { Haptics.selectionAsync(); } catch {}
+              }}
+              style={styles.premiumCardHeaderCollapsed}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.premiumCardTitleCollapsed, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>Duration</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={[styles.premiumCardValue, { color: isRecording ? '#fff' : colors.primary }]}>{customDuration >= 60 ? (customDuration % 60 === 0 ? `${customDuration / 60}h` : `${Math.floor(customDuration / 60)}h ${customDuration % 60}m`) : `${customDuration}m`}</Text>
+                <Feather name="chevron-down" size={16} color={isRecording ? '#ffffff66' : colors.mutedForeground} />
+              </View>
+            </TouchableOpacity>
+          ) : (
+            <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(200)} style={{ padding: 16 }}>
+              <Text style={[styles.premiumCardTitleActive, { color: isRecording ? '#ffffffcc' : colors.foreground }]}>Session Length</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                {[15, 30, 45, 60, 90, 120, 180, 240].map(dur => (
+                  <TouchableOpacity
+                    key={dur}
+                    style={[styles.premiumPill, { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: isRecording ? '#ffffff11' : colors.background, borderColor: isRecording ? '#ffffff22' : colors.border }]}
+                    onPress={() => { setCustomDuration(dur); try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {} }}
+                  >
+                    <Feather name="clock" size={14} color={isRecording ? '#ffffffcc' : colors.mutedForeground} />
+                    <Text style={[styles.premiumPillText, { color: isRecording ? '#fff' : colors.foreground }]}>
+                      {dur >= 60 ? (dur % 60 === 0 ? `${dur / 60}h` : `${Math.floor(dur / 60)}h ${dur % 60}m`) : `${dur}m`}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </Animated.View>
+          )}
+        </Animated.View>
+      )}
+
+      {/* 6. Link Task */}
+      {customDuration && tasks.length > 0 && (
+          <Animated.View entering={FadeIn.duration(250)} style={[styles.premiumCard, { backgroundColor: isRecording ? '#ffffff11' : colors.card, borderColor: isRecording ? '#ffffff22' : colors.border }]}>
+            <TouchableOpacity
+              style={styles.premiumCardHeaderCollapsed}
+              onPress={() => setShowTaskList(!showTaskList)}
+              activeOpacity={0.7}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                <View style={[styles.premiumTileIconWrap, { width: 28, height: 28, borderRadius: 6, backgroundColor: taskId ? (isRecording ? '#ffffff22' : colors.primary + '22') : (isRecording ? '#ffffff11' : colors.muted) }]}>
+                  <Feather
+                    name={taskId ? 'link-2' : 'link'}
+                    size={14}
+                    color={taskId ? (isRecording ? '#fff' : colors.primary) : (isRecording ? '#ffffffcc' : colors.mutedForeground)}
+                  />
+                </View>
+                <Text
+                  style={[styles.premiumCardTitleCollapsed, { color: taskId ? (isRecording ? '#fff' : colors.primary) : (isRecording ? '#ffffffcc' : colors.foreground), flex: 1 }]}
+                  numberOfLines={1}
+                >
+                  {taskId ? taskTitle : 'Link AtlasOS Task'}
+                </Text>
+              </View>
+              <Feather
+                name={showTaskList ? 'chevron-up' : 'chevron-down'}
+                size={16}
+                color={isRecording ? '#ffffffcc' : colors.mutedForeground}
+              />
+            </TouchableOpacity>
+
+            {showTaskList && (
+              <Animated.View entering={FadeIn.duration(200)} style={[styles.taskListContainer, { borderTopColor: isRecording ? '#ffffff33' : colors.border }]}>
+                {taskId && (
+                  <TouchableOpacity
+                    style={[styles.taskListItem, { backgroundColor: isRecording ? '#ffffff11' : 'transparent' }]}
+                    onPress={() => {
+                      setTaskId(undefined);
+                      setTaskTitle(undefined);
+                      setShowTaskList(false);
+                      try { Haptics.selectionAsync(); } catch {}
+                    }}
+                  >
+                    <Feather name="x" size={14} color={isRecording ? '#ff8888' : colors.destructive} />
+                    <Text style={[styles.taskListText, { color: isRecording ? '#ff8888' : colors.destructive }]}>
+                      Clear selection
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                {tasks.map(task => {
+                  const isSelected = taskId === task.id;
+                  const isDone = task.status === 'done';
+                  return (
+                    <TouchableOpacity
+                      key={task.id}
+                      style={[
+                        styles.taskListItem,
+                        {
+                          backgroundColor: isSelected ? (isRecording ? '#ffffff22' : colors.primary + '15') : 'transparent',
+                        }
+                      ]}
+                      onPress={() => {
+                        setTaskId(task.id);
+                        setTaskTitle(task.title);
+                        setShowTaskList(false);
+                        try { Haptics.selectionAsync(); } catch {}
+                      }}
+                    >
+                      <Feather
+                        name={isSelected ? 'check-circle' : (isDone ? 'check' : 'circle')}
+                        size={14}
+                        color={isSelected || isDone ? (isRecording ? '#fff' : colors.primary) : (isRecording ? '#ffffff66' : colors.mutedForeground)}
+                      />
+                      <Text
+                        style={[styles.taskListText, { color: isSelected ? (isRecording ? '#fff' : colors.primary) : (isRecording ? '#ffffffcc' : colors.foreground) }]}
+                        numberOfLines={1}
+                      >
+                        {task.title}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </Animated.View>
+            )}
+          </Animated.View>
+      )}
+    </View>
   );
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <Animated.View style={[styles.root, bgStyle]}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       {/* Handle */}
       <View style={[styles.handle, { backgroundColor: isRecording ? '#ffffff44' : colors.border }]} />
 
@@ -911,69 +995,77 @@ export default function CheckinScreen() {
       </ScrollView>
 
       {/* ── Sticky save button ──────────────────────────────────── */}
-      <View
-        style={[
-          styles.saveBar,
-          { paddingBottom: Math.max(insets.bottom, 20), backgroundColor: isRecording ? '#1B4332' : colors.background },
-        ]}
-      >
-        <Animated.View style={[{ width: '100%' }, saveBtnStyle]}>
-          {step === 1 ? (
-            <Pressable
+      {step === 1 ? (
+        <Animated.View 
+          entering={FadeIn.duration(300).springify().damping(15)}
+          style={[
+            styles.floatingSaveContainer,
+            { paddingBottom: Math.max(insets.bottom, 24) }
+          ]}
+        >
+          <TouchableOpacity
+            style={[
+              styles.premiumSaveBtn,
+              {
+                backgroundColor: isRecording ? '#ffffff22' : colors.primary,
+                shadowColor: isRecording ? '#ffffff' : colors.primary,
+              },
+            ]}
+            onPress={() => {
+              try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+              setStep(2);
+            }}
+            disabled={isRecording || isProcessing}
+            activeOpacity={0.8}
+          >
+            <Text
               style={[
-                styles.saveBtn,
-                {
-                  backgroundColor: isRecording ? '#ffffff22' : colors.primary,
-                },
+                styles.premiumSaveBtnText,
+                { color: isRecording ? '#ffffffcc' : '#fff' },
               ]}
-              onPress={() => {
-                try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
-                setStep(2);
-              }}
-              disabled={isRecording || isProcessing}
             >
-              <Text style={[styles.saveBtnText, { color: isRecording ? '#ffffffcc' : '#fff' }]}>Next Step</Text>
-              <Feather name="arrow-right" size={18} color={isRecording ? '#ffffffcc' : '#fff'} />
-            </Pressable>
-          ) : (
-            <Pressable
-              style={[
-                styles.saveBtn,
-                {
-                  backgroundColor:
-                    selectedTags.length > 0
-                      ? isRecording ? '#fff' : colors.primary
-                      : colors.muted,
-                },
-              ]}
-              onPress={handleSave}
-              disabled={saving || isRecording || isProcessing}
-            >
-              {saving ? (
-                <Feather name="loader" size={18} color={selectedTags.length > 0 ? (isRecording ? colors.primary : '#fff') : colors.mutedForeground} />
-              ) : (
-                <Feather name="check" size={18} color={selectedTags.length > 0 ? (isRecording ? colors.primary : '#fff') : colors.mutedForeground} />
-              )}
-              <Text
-                style={[
-                  styles.saveBtnText,
-                  {
-                    color:
-                      selectedTags.length > 0
-                        ? isRecording ? colors.primary : '#fff'
-                        : colors.mutedForeground,
-                  },
-                ]}
-              >
-                {saving ? 'Saving…' : (primaryTag ? `Log ${primaryTag.label}` : 'Save Entry')}
-              </Text>
-              {selectedTags.length > 0 && !saving && (
-                <Feather name="arrow-right" size={18} color={isRecording ? colors.primary : '#fff'} />
-              )}
-            </Pressable>
-          )}
+              Next Step
+            </Text>
+            <Feather name="arrow-right" size={20} color={isRecording ? '#ffffffcc' : '#fff'} />
+          </TouchableOpacity>
         </Animated.View>
-      </View>
+      ) : step === 2 && (selectedDomainId && selectedActivityId && focus && energy && customDuration) ? (
+        <Animated.View 
+          entering={FadeIn.duration(300).springify().damping(15)}
+          style={[
+            styles.floatingSaveContainer,
+            { paddingBottom: Math.max(insets.bottom, 24) }
+          ]}
+        >
+          <TouchableOpacity
+            style={[
+              styles.premiumSaveBtn,
+              {
+                backgroundColor: isRecording ? '#ffffff' : colors.primary,
+                shadowColor: isRecording ? '#ffffff' : colors.primary,
+              },
+            ]}
+            onPress={handleSave}
+            disabled={saving || isRecording || isProcessing}
+            activeOpacity={0.8}
+          >
+            {saving ? (
+              <Feather name="loader" size={20} color={isRecording ? '#1B4332' : '#fff'} />
+            ) : (
+              <Feather name="check" size={20} color={isRecording ? '#1B4332' : '#fff'} />
+            )}
+            <Text
+              style={[
+                styles.premiumSaveBtnText,
+                { color: isRecording ? '#1B4332' : '#fff' },
+              ]}
+            >
+              {saving ? 'Saving...' : 'Save Entry'}
+            </Text>
+          </TouchableOpacity>
+        </Animated.View>
+      ) : null}
+      </KeyboardAvoidingView>
     </Animated.View>
   );
 }
@@ -1115,79 +1207,125 @@ const styles = StyleSheet.create({
   },
   taskListContainer: {
     marginTop: 12,
-    gap: 2,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#0000001a',
-    paddingTop: 12,
+    gap: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#00000015',
+    paddingTop: 16,
+    paddingBottom: 4,
   },
   taskListItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 8,
+    padding: 12,
+    borderRadius: 12,
   },
   taskListText: {
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
+    fontSize: 16,
+    fontFamily: 'Inter_500Medium',
+    letterSpacing: -0.2,
     flex: 1,
   },
-  taskStatusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+  premiumCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    overflow: 'hidden',
   },
-
-  // ── Voice ──
-  micArea: {
+  premiumCardHeaderCollapsed: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: 32,
-    paddingBottom: 16,
-    gap: 20,
-    position: 'relative',
+    justifyContent: 'space-between',
+    padding: 16,
   },
-  rings: {
-    position: 'absolute',
-    top: 32,
-    width: 110, height: 110,
-    alignItems: 'center', justifyContent: 'center',
+  premiumCardTitleCollapsed: {
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
   },
-  pulseRing: {
-    position: 'absolute',
-    width: 110, height: 110,
-    borderRadius: 55,
-    borderWidth: 2,
-    borderColor: '#ffffff',
+  premiumCardValue: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
   },
-  micBtn: {
-    width: 100, height: 100,
-    borderRadius: 50,
-    alignItems: 'center', justifyContent: 'center',
+  premiumCardTitleActive: {
+    fontSize: 18,
+    fontFamily: 'Inter_700Bold',
+    marginBottom: 16,
+    letterSpacing: -0.3,
   },
-  micStatusWrap: { alignItems: 'center', gap: 4 },
-  micStatus: { fontSize: 20, fontFamily: 'Inter_700Bold', letterSpacing: -0.5 },
-  micSubtext: { fontSize: 12, fontFamily: 'Inter_400Regular', letterSpacing: 0.2, textAlign: 'center' },
-  tapStop: { fontSize: 11, color: '#ffffff77', fontFamily: 'Inter_400Regular' },
-  txHintRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  txErrorRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  txHint:  { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
-  txError: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: '#EF4444' },
-
-  // ── Save bar ──
-  saveBar: {
+  premiumGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  premiumGridRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  premiumTile: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    gap: 10,
+    flexGrow: 1,
+  },
+  premiumTileIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  premiumTileText: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  premiumPill: {
     paddingHorizontal: 18,
-    paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#00000011',
+    paddingVertical: 12,
+    borderRadius: 100,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  saveBtn: {
+  premiumPillText: {
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    textTransform: 'capitalize',
+  },
+  floatingSaveContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+  },
+  premiumSaveBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 16,
-    borderRadius: 18,
     gap: 8,
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    borderRadius: 100,
+    width: '100%',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 8,
   },
-  saveBtnText: { fontSize: 16, fontFamily: 'Inter_700Bold', letterSpacing: 0.1 },
+  premiumSaveBtnText: {
+    fontSize: 17,
+    fontFamily: 'Inter_700Bold',
+    letterSpacing: 0.2,
+  },
+  pulseRing: {
+    position: 'absolute',
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#EF444433',
+  },
 });

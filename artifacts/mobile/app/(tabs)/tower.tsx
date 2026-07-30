@@ -78,17 +78,17 @@ export default function TowerScreen() {
     ? todayEntries
     : getEntriesForDate(entries, displayKey);
 
-  const deepCount  = displayEntries.filter(e => e.focus === 'deep').length;
-  const lightCount = displayEntries.filter(e => e.focus === 'light').length;
-  const neutralCount = displayEntries.filter(e => e.focus === 'neutral').length;
-  const offCount   = displayEntries.filter(e => e.focus === 'off').length;
-  const streak     = getConsecutiveDayStreak(entries, settings.dayStartHour);
-  const focusScore = getFocusScore(displayEntries);
+  const deepCount       = displayEntries.filter(e => e.focus === 'deep').length;
+  const normalCount     = displayEntries.filter(e => e.focus === 'normal' || e.focus === 'light').length;
+  const neutralCount    = displayEntries.filter(e => e.focus === 'neutral').length;
+  const distractedCount = displayEntries.filter(e => e.focus === 'distracted' || e.focus === 'off').length;
+  const streak          = getConsecutiveDayStreak(entries, settings.dayStartHour);
+  const focusScore      = getFocusScore(displayEntries);
 
-  const deepMin  = displayEntries.filter(e => e.focus === 'deep').reduce((s, e) => s + (e.intervalMinutes ?? settings.interval), 0);
-  const lightMin = displayEntries.filter(e => e.focus === 'light').reduce((s, e) => s + (e.intervalMinutes ?? settings.interval), 0);
-  const neutralMin = displayEntries.filter(e => e.focus === 'neutral').reduce((s, e) => s + (e.intervalMinutes ?? settings.interval), 0);
-  const offMin   = displayEntries.filter(e => e.focus === 'off').reduce((s, e) => s + (e.intervalMinutes ?? settings.interval), 0);
+  const deepMin       = displayEntries.filter(e => e.focus === 'deep').reduce((s, e) => s + (e.duration ?? e.intervalMinutes ?? settings.interval), 0);
+  const normalMin     = displayEntries.filter(e => e.focus === 'normal' || e.focus === 'light').reduce((s, e) => s + (e.duration ?? e.intervalMinutes ?? settings.interval), 0);
+  const neutralMin    = displayEntries.filter(e => e.focus === 'neutral').reduce((s, e) => s + (e.duration ?? e.intervalMinutes ?? settings.interval), 0);
+  const distractedMin = displayEntries.filter(e => e.focus === 'distracted' || e.focus === 'off').reduce((s, e) => s + (e.duration ?? e.intervalMinutes ?? settings.interval), 0);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const last7 = getLast7DayKeys(settings.dayStartHour);
@@ -129,12 +129,12 @@ export default function TowerScreen() {
 
         {/* ── Stats row ── */}
         <View style={styles.statsStrip}>
-          <StatCard icon="award" label="Streak"      value={`${streak}d`}      accent={colors.primary} />
-          <StatCard icon="zap"   label="Deep Focus"  value={deepMin >= 60 ? `${Math.floor(deepMin / 60)}h ${deepMin % 60}m` : `${deepMin}m`} accent="#52B788" />
-          <StatCard icon="sun"   label="Light Focus" value={`${lightMin}m`}    accent="#E9C46A" />
-          <StatCard icon="coffee" label="Neutral"    value={`${neutralMin}m`}  accent="#9CA3AF" />
-          <StatCard icon="moon"  label="Off"         value={`${offMin}m`}      accent="#6B7280" />
-          <StatCard icon="layers" label="Blocks"     value={`${blockCount}`}   accent="#A78BFA" />
+          <StatCard icon="award"   label="Streak"       value={`${streak}d`}      accent={colors.primary} />
+          <StatCard icon="zap"     label="Deep Focus"   value={deepMin >= 60 ? `${Math.floor(deepMin / 60)}h ${deepMin % 60}m` : `${deepMin}m`} accent="#52B788" />
+          <StatCard icon="sun"     label="Normal"       value={normalMin >= 60 ? `${Math.floor(normalMin / 60)}h ${normalMin % 60}m` : `${normalMin}m`} accent="#60A5FA" />
+          <StatCard icon="coffee"  label="Neutral"      value={`${neutralMin}m`}  accent="#818CF8" />
+          <StatCard icon="wind"    label="Distracted"   value={`${distractedMin}m`} accent="#EF4444" />
+          <StatCard icon="layers"  label="Blocks"       value={`${blockCount}`}   accent="#A78BFA" />
         </View>
 
         {/* ── Tower visualization ── */}
@@ -221,9 +221,10 @@ export default function TowerScreen() {
         {/* ── Legend ── */}
         <View style={[styles.legendCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           {[
-            { front: '#2D6A4F', top: '#52B788', label: 'Deep Focus', desc: 'Fully concentrated' },
-            { front: '#C49A3C', top: '#E9C46A', label: 'Light Focus', desc: 'Casual/productive' },
-            { front: '#4B5563', top: '#6B7280', label: 'Off',         desc: 'Distracted/resting' },
+            { front: '#2D6A4F', top: '#52B788', label: 'Deep Focus',  desc: 'Fully concentrated' },
+            { front: '#2563EB', top: '#60A5FA', label: 'Normal',      desc: 'Productive, not locked in' },
+            { front: '#4F46E5', top: '#818CF8', label: 'Neutral',     desc: 'Administrative / light' },
+            { front: '#DC2626', top: '#FCA5A5', label: 'Distracted',  desc: 'Off task or resting' },
           ].map(item => (
             <View key={item.label} style={styles.legendItem}>
               {/* Mini 3D block preview */}

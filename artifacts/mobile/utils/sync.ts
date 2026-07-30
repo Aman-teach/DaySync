@@ -1,7 +1,7 @@
 import { databases, APPWRITE_CONFIG, Query, account, Permission, Role } from '@/lib/appwrite';
 import { Entry, DaySummary } from '@/types';
-import { getAllEntries, saveEntry, deleteEntry as storeDeleteEntry, getAllDaySummaries, saveDaySummary } from './storage';
-import { Alert } from 'react-native';
+import { getAllEntries, saveEntry, deleteEntry as storeDeleteEntry, getAllDaySummaries, saveDaySummary, saveCustomTags } from './storage';
+import { TagConfig } from '@/constants/tags';
 
 /**
  * Format entry for Appwrite document storage.
@@ -13,9 +13,17 @@ function entryToDocument(entry: Entry, userId: string) {
     tags: entry.tags,
     focus: entry.focus,
     energy: entry.energy,
-    intervalMinutes: entry.intervalMinutes,
+    domainId: entry.domainId || null,
+    activityId: entry.activityId || null,
+    duration: entry.duration || entry.intervalMinutes || 30,
+    intervalMinutes: entry.intervalMinutes || entry.duration || 30,
+    taskId: entry.taskId || null,
+    taskTitle: entry.taskTitle || null,
+    imageUrl: entry.imageUrl || null,
+    leverage: entry.leverage || null,
     dateKey: entry.dateKey,
     userId: userId,
+    isDeleted: entry.isDeleted || false,
   };
 }
 
@@ -26,10 +34,18 @@ function documentToEntry(doc: any): Entry {
     tags: Array.isArray(doc.tags) ? doc.tags : [],
     focus: doc.focus || 'deep',
     energy: doc.energy || 'high',
+    domainId: doc.domainId || undefined,
+    activityId: doc.activityId || undefined,
+    duration: doc.duration || doc.intervalMinutes || 30,
+    taskId: doc.taskId || undefined,
+    taskTitle: doc.taskTitle || undefined,
+    imageUrl: doc.imageUrl || undefined,
+    leverage: doc.leverage || undefined,
     createdAt: doc.$createdAt || doc.createdAt || new Date().toISOString(),
     updatedAt: doc.$updatedAt || doc.updatedAt || doc.$createdAt || new Date().toISOString(),
-    intervalMinutes: doc.intervalMinutes || 30,
+    intervalMinutes: doc.intervalMinutes || doc.duration || 30,
     dateKey: doc.dateKey || '',
+    isDeleted: doc.isDeleted || false,
   };
 }
 
@@ -46,6 +62,7 @@ function summaryToDocument(summary: DaySummary, userId: string) {
     mood: summary.mood,
     anomalies: summary.anomalies,
     userId: userId,
+    isDeleted: summary.isDeleted || false,
   };
 }
 
@@ -66,6 +83,7 @@ function documentToSummary(doc: any): DaySummary {
     mood: doc.mood || '',
     anomalies: Array.isArray(doc.anomalies) ? doc.anomalies : [],
     createdAt: doc.$createdAt || doc.createdAt || new Date().toISOString(),
+    isDeleted: doc.isDeleted || false,
   };
 }
 
@@ -98,38 +116,37 @@ export async function pushEntryToAppwrite(entry: Entry): Promise<void> {
     }
   } catch (err: any) {
     // Offline or schema mismatch — silently log so local storage remains functional
-    console.log('[Appwrite Sync] pushEntry failed (offline/fallback):', err);
-    Alert.alert('Appwrite Push Error', err?.message || String(err));
+    console.log('[Appwrite Sync] pushEntry failed (offline/fallback):', err?.message ?? err);
   }
 }
 
-/**
- * Delete an entry from Appwrite asynchronously.
- */
-export async function deleteEntryFromAppwrite(id: string): Promise<void> {
-  try {
-    await databases.deleteDocument(
-      APPWRITE_CONFIG.DATABASE_ID,
-      APPWRITE_CONFIG.COLLECTIONS.ENTRIES,
-      id
-    );
-  } catch (err) {
-    console.log('[Appwrite Sync] deleteEntry failed:', err);
-  }
-}
+
 
 /**
  * Synchronize all entries between local storage (AsyncStorage) and Appwrite.
  */
 export async function syncEntriesWithAppwrite(localEntries: Entry[]): Promise<Entry[]> {
   try {
-    const response = await databases.listDocuments(
-      APPWRITE_CONFIG.DATABASE_ID,
-      APPWRITE_CONFIG.COLLECTIONS.ENTRIES,
-      [Query.limit(500)]
-    );
-
-    const remoteDocs = response.documents || [];
+    let remoteDocs: any[] = [];
+    let lastId: string | null = null;
+    let hasMore = true;
+    while (hasMore) {
+      const queries = [Query.limit(500)];
+      if (lastId) queries.push(Query.cursorAfter(lastId));
+      
+      const response = await databases.listDocuments(
+        APPWRITE_CONFIG.DATABASE_ID,
+        APPWRITE_CONFIG.COLLECTIONS.ENTRIES,
+        queries
+      );
+      
+      remoteDocs = remoteDocs.concat(response.documents);
+      if (response.documents.length < 500) {
+        hasMore = false;
+      } else {
+        lastId = response.documents[response.documents.length - 1].$id;
+      }
+    }
     const remoteEntriesMap = new Map<string, Entry>();
 
     for (const doc of remoteDocs) {
@@ -172,9 +189,9 @@ export async function syncEntriesWithAppwrite(localEntries: Entry[]): Promise<En
 
     return Array.from(mergedEntriesMap.values());
   } catch (err: any) {
-    console.log('[Appwrite Sync] syncEntries failed (operating in offline mode):', err);
-    Alert.alert('Appwrite Sync Error', err?.message || String(err));
-    return localEntries;
+    console.log('[Appwrite Sync] syncEntries failed (operating in offline mode):', err?.message ?? err);
+    // Return freshest local data from storage — never overwrite what the user just saved
+    return getAllEntries();
   }
 }
 
@@ -214,13 +231,26 @@ export async function pushDaySummaryToAppwrite(summary: DaySummary): Promise<voi
  */
 export async function syncDaySummariesWithAppwrite(localSummaries: DaySummary[]): Promise<DaySummary[]> {
   try {
-    const response = await databases.listDocuments(
-      APPWRITE_CONFIG.DATABASE_ID,
-      APPWRITE_CONFIG.COLLECTIONS.DAY_SUMMARIES,
-      [Query.limit(200)]
-    );
-
-    const remoteDocs = response.documents || [];
+    let remoteDocs: any[] = [];
+    let lastId: string | null = null;
+    let hasMore = true;
+    while (hasMore) {
+      const queries = [Query.limit(200)];
+      if (lastId) queries.push(Query.cursorAfter(lastId));
+      
+      const response = await databases.listDocuments(
+        APPWRITE_CONFIG.DATABASE_ID,
+        APPWRITE_CONFIG.COLLECTIONS.DAY_SUMMARIES,
+        queries
+      );
+      
+      remoteDocs = remoteDocs.concat(response.documents);
+      if (response.documents.length < 200) {
+        hasMore = false;
+      } else {
+        lastId = response.documents[response.documents.length - 1].$id;
+      }
+    }
     const remoteMap = new Map<string, DaySummary>();
 
     for (const doc of remoteDocs) {
@@ -250,5 +280,117 @@ export async function syncDaySummariesWithAppwrite(localSummaries: DaySummary[])
   } catch (err) {
     console.log('[Appwrite Sync] syncDaySummaries failed:', err);
     return localSummaries;
+  }
+}
+
+/**
+ * Format tag for Appwrite document storage.
+ */
+function tagToDocument(tag: TagConfig, userId: string) {
+  return {
+    label: tag.label,
+    icon: tag.icon,
+    color: tag.color,
+    bg: tag.bg || null,
+    userId: userId,
+    isDeleted: tag.isDeleted || false,
+  };
+}
+
+function documentToTag(doc: any): TagConfig {
+  return {
+    id: doc.$id || doc.id,
+    label: doc.label || '',
+    icon: doc.icon || 'star',
+    color: doc.color || '#444444',
+    bg: doc.bg || null,
+    isDeleted: doc.isDeleted || false,
+  };
+}
+
+export async function pushTagToAppwrite(tag: TagConfig): Promise<void> {
+  try {
+    const user = await account.get();
+    const data = tagToDocument(tag, user.$id);
+    try {
+      await databases.updateDocument(
+        APPWRITE_CONFIG.DATABASE_ID,
+        APPWRITE_CONFIG.COLLECTIONS.TAGS,
+        tag.id,
+        data
+      );
+    } catch {
+      await databases.createDocument(
+        APPWRITE_CONFIG.DATABASE_ID,
+        APPWRITE_CONFIG.COLLECTIONS.TAGS,
+        tag.id,
+        data,
+        [
+          Permission.read(Role.user(user.$id)),
+          Permission.write(Role.user(user.$id)),
+        ]
+      );
+    }
+  } catch (err) {
+    console.log('[Appwrite Sync] pushTag failed:', err);
+  }
+}
+
+
+
+export async function syncTagsWithAppwrite(localTags: TagConfig[]): Promise<TagConfig[]> {
+  try {
+    let remoteDocs: any[] = [];
+    let lastId: string | null = null;
+    let hasMore = true;
+    while (hasMore) {
+      const queries = [Query.limit(200)];
+      if (lastId) queries.push(Query.cursorAfter(lastId));
+      
+      const response = await databases.listDocuments(
+        APPWRITE_CONFIG.DATABASE_ID,
+        APPWRITE_CONFIG.COLLECTIONS.TAGS,
+        queries
+      );
+      
+      remoteDocs = remoteDocs.concat(response.documents);
+      if (response.documents.length < 200) {
+        hasMore = false;
+      } else {
+        lastId = response.documents[response.documents.length - 1].$id;
+      }
+    }
+    const remoteMap = new Map<string, TagConfig>();
+
+    for (const doc of remoteDocs) {
+      const tag = documentToTag(doc);
+      remoteMap.set(tag.id, tag);
+    }
+
+    const mergedMap = new Map<string, TagConfig>();
+    for (const t of localTags) {
+      mergedMap.set(t.id, t);
+    }
+
+    // Merge strategy: remote tags that don't exist locally are pulled
+    // Local tags that don't exist remotely are pushed
+    for (const [id, remoteTag] of remoteMap.entries()) {
+      if (!mergedMap.has(id)) {
+        mergedMap.set(id, remoteTag);
+      }
+    }
+
+    for (const [id, localTag] of mergedMap.entries()) {
+      if (!remoteMap.has(id)) {
+        pushTagToAppwrite(localTag);
+      }
+    }
+
+    const finalTags = Array.from(mergedMap.values());
+    await saveCustomTags(finalTags);
+    return finalTags;
+  } catch (err) {
+    console.log('[Appwrite Sync] syncTags failed:', err);
+    return localTags;
   }
 }

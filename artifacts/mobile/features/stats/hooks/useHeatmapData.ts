@@ -8,7 +8,7 @@ import { getEntriesForDate } from '@/utils/helpers';
  * Hook responsible solely for generating the 2D matrix used by the heatmap.
  * Deeply memoizes the array iteration to prevent 112 date allocations per render.
  */
-export function useHeatmapData(entries: Entry[], dayStartHour: number, days = 30) {
+export function useHeatmapData(entries: Entry[], dayStartHour: number, days = 70) {
   return useMemo(() => {
     const safeEntries = Array.isArray(entries) ? entries : [];
     
