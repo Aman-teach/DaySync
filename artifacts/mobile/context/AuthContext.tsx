@@ -40,6 +40,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const login = async (email: string, pass: string) => {
+    try {
+      await account.deleteSession('current');
+    } catch (e) {
+      // Ignore if no active session
+    }
     await account.createEmailPasswordSession(email, pass);
     const currentUser = await account.get();
     setUser(currentUser);
@@ -51,7 +56,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = async () => {
-    await account.deleteSession('current');
+    try {
+      await account.deleteSession('current');
+    } catch (e) {
+      // Ignore
+    }
     setUser(null);
   };
 

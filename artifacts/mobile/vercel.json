@@ -2,7 +2,7 @@
   "version": 2,
   "buildCommand": "expo export -p web",
   "outputDirectory": "dist",
-  "installCommand": "pnpm install",
+  "installCommand": "cd ../.. && pnpm install",
   "framework": null,
   "rewrites": [
     {

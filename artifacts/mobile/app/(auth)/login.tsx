@@ -28,28 +28,56 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const showError = (msg: string) => {
+    setErrorMsg(msg);
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      console.error('[Auth Error]', msg);
+    } else {
+      Alert.alert('Authentication Error', msg);
+    }
+  };
 
   const handleSubmit = async () => {
-    if (!email || !password) {
-      Alert.alert('Error', 'Please enter both email and password.');
+    setErrorMsg(null);
+    const cleanEmail = email.trim();
+    const cleanPassword = password.trim();
+
+    if (!cleanEmail || !cleanPassword) {
+      showError('Please enter both email and password.');
       return;
     }
 
     setLoading(true);
     try {
       if (isLogin) {
-        await login(email, password);
+        await login(cleanEmail, cleanPassword);
       } else {
-        if (!name) {
-          Alert.alert('Error', 'Please enter your name.');
+        if (!name.trim()) {
+          showError('Please enter your name.');
           setLoading(false);
           return;
         }
-        await signup(email, password, name);
+        await signup(cleanEmail, cleanPassword, name.trim());
       }
       router.replace('/(tabs)');
     } catch (err: any) {
-      Alert.alert('Authentication Failed', err.message);
+      console.error('[Auth Exception]', err);
+      const rawMsg = err?.message || '';
+      let userFriendlyMsg = rawMsg;
+
+      if (rawMsg.includes('Invalid credentials') || rawMsg.includes('user_invalid_credentials')) {
+        userFriendlyMsg = 'Invalid email or password. If you haven\'t created an account yet, tap "Sign up" below to register.';
+      } else if (rawMsg.includes('session is active')) {
+        userFriendlyMsg = 'A session is already active. Redirecting...';
+        router.replace('/(tabs)');
+        return;
+      } else if (rawMsg.includes('Network Error') || rawMsg.includes('Failed to fetch')) {
+        userFriendlyMsg = 'Network error. Please check your internet connection or Appwrite backend.';
+      }
+
+      showError(userFriendlyMsg);
     } finally {
       setLoading(false);
     }
@@ -80,6 +108,12 @@ export default function LoginScreen() {
           </View>
 
           <View style={styles.formContainer}>
+            {errorMsg && (
+              <View style={styles.errorBanner}>
+                <Feather name="alert-circle" size={16} color="#DC2626" style={{ marginRight: 8 }} />
+                <Text style={styles.errorText}>{errorMsg}</Text>
+              </View>
+            )}
             {!isLogin && (
               <View style={[styles.inputWrapper, { borderBottomColor: colors.border }]}>
                 <Feather name="user" size={18} color={colors.primary} style={styles.inputIcon} />
@@ -250,5 +284,23 @@ const styles = StyleSheet.create({
   toggleText: {
     fontSize: 14,
     fontFamily: 'Inter_700Bold',
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEE2E2',
+    borderColor: '#FCA5A5',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginBottom: 12,
+  },
+  errorText: {
+    flex: 1,
+    color: '#991B1B',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    lineHeight: 20,
   },
 });
