@@ -7,7 +7,7 @@
     "dev": "expo start",
     "web": "expo start --web",
     "build": "expo export -p web --output-dir dist",
-    "build:web": "expo export -p web --output-dir ../../dist",
+    "build:web": "expo export -p web --output-dir ../../public",
     "build:expogo": "node scripts/build.js",
     "serve": "node server/serve.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
