@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "buildCommand": "pnpm --filter @workspace/mobile run build:web",
+  "outputDirectory": "artifacts/mobile/dist",
+  "installCommand": "pnpm install",
+  "framework": null,
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/"
+    }
+  ]
+}
