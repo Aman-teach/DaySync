@@ -9,7 +9,7 @@ import { useColors } from '@/hooks/useColors';
 import { useApp } from '@/context/AppContext';
 import { getNextTargetTime } from '@/utils/time';
 
-export function CountdownTimer() {
+export function CountdownTimer({ hideLabel = false }: { hideLabel?: boolean } = {}) {
   const { settings, todayEntries } = useApp();
   const colors = useColors();
 
@@ -59,9 +59,11 @@ export function CountdownTimer() {
 
   return (
     <View style={styles.container}>
-      <Text style={[styles.label, { color: colors.mutedForeground }]}>
-        Next check-in
-      </Text>
+      {!hideLabel && (
+        <Text style={[styles.label, { color: colors.mutedForeground }]}>
+          Next check-in
+        </Text>
+      )}
       <Text style={[styles.time, { color: colors.primary }]}>
         {displayTime}
       </Text>
